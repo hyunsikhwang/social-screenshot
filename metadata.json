@@ -1,0 +1,6 @@
+{
+  "name": "Social Screenshot Studio",
+  "description": "X(Twitter), YouTube, and Telegram posts captured as beautifully styled screenshots with custom themes, fonts, and instant share options.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
