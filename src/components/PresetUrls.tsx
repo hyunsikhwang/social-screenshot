@@ -51,7 +51,7 @@ export default function PresetUrls({ platform, onSelect }: PresetUrlsProps) {
           id={`preset-btn-${platform}-${idx}`}
           type="button"
           onClick={() => onSelect(preset.url)}
-          className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-1 px-2.5 rounded-md transition-colors border border-slate-200 cursor-pointer shadow-sm"
+          className="bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 font-medium py-1.5 px-3 rounded-md transition-colors border border-slate-200 cursor-pointer shadow-sm min-h-[32px] inline-flex items-center"
         >
           {preset.label}
         </button>

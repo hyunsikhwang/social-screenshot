@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="50%" stop-color="#8b5cf6" />
+      <stop offset="100%" stop-color="#ec4899" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#4f46e5" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  <!-- Background Rounded Rect -->
+  <rect x="32" y="32" width="448" height="448" rx="112" fill="url(#grad)" filter="url(#shadow)" />
+  
+  <!-- Outer Camera / Aperture Body -->
+  <rect x="120" y="150" width="272" height="212" rx="48" fill="#ffffff" />
+  
+  <!-- Top Flash/Button -->
+  <rect x="170" y="116" width="60" height="34" rx="12" fill="#ffffff" />
+  <circle cx="340" cy="190" r="16" fill="#ec4899" />
+
+  <!-- Lens Outer ring -->
+  <circle cx="256" cy="256" r="76" fill="url(#grad)" />
+  
+  <!-- Lens Inner glass with shine -->
+  <circle cx="256" cy="256" r="48" fill="#1e1b4b" />
+  
+  <!-- Lens Reflection -->
+  <circle cx="274" cy="238" r="14" fill="#ffffff" opacity="0.8" />
+  <circle cx="244" cy="268" r="6" fill="#ffffff" opacity="0.4" />
+</svg>

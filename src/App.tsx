@@ -115,6 +115,14 @@ export default function App() {
     setError(null);
     setCopyStatus("idle");
 
+    // Smooth scroll to preview workspace on mobile/tablet so user sees live logs & result
+    setTimeout(() => {
+      const previewPanel = document.getElementById("preview-workspace-panel");
+      if (previewPanel) {
+        previewPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 80);
+
     try {
       const response = await fetch("/api/screenshot", {
         method: "POST",
@@ -270,12 +278,13 @@ export default function App() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <span className="flex h-2 w-2 relative">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
             </span>
-            <span className="text-xs font-mono font-semibold text-slate-500">Playwright Server Active</span>
+            <span className="text-xs font-mono font-semibold text-slate-500 hidden sm:inline">Playwright Server Active</span>
+            <span className="text-xs font-mono font-semibold text-slate-500 inline sm:hidden">Active</span>
           </div>
         </div>
       </header>
@@ -287,7 +296,7 @@ export default function App() {
         <section className="col-span-1 lg:col-span-5 flex flex-col gap-6" id="controls-panel">
           
           {/* Main Form Box */}
-          <div className="bg-white border border-slate-200/80 rounded-2xl p-6 shadow-sm space-y-6">
+          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-6 shadow-sm space-y-5 sm:space-y-6">
             <div className="space-y-1">
               <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-indigo-500" />
@@ -454,7 +463,7 @@ export default function App() {
         {/* Right Side: Visual Canvas Workspace Panel */}
         <section className="col-span-1 lg:col-span-7 flex flex-col gap-6" id="preview-workspace-panel">
           
-          <div className="bg-white border border-slate-200/80 rounded-3xl p-6 flex flex-col h-full min-h-[580px] shadow-sm relative">
+          <div className="bg-white border border-slate-200/80 rounded-2xl sm:rounded-3xl p-4 sm:p-6 flex flex-col h-full min-h-[420px] sm:min-h-[580px] shadow-sm relative">
             
             <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3 shrink-0">
               <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2">
