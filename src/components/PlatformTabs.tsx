@@ -1,5 +1,5 @@
 import React from "react";
-import { Twitter, Youtube, Send, Image } from "lucide-react";
+import { Twitter, Youtube, Send, Image, Sparkles } from "lucide-react";
 import { Platform } from "../types";
 
 interface PlatformTabsProps {
@@ -9,6 +9,14 @@ interface PlatformTabsProps {
 
 export default function PlatformTabs({ activePlatform, onChange }: PlatformTabsProps) {
   const tabs = [
+    {
+      id: "auto" as Platform,
+      name: "자동 감지 (Auto)",
+      icon: Sparkles,
+      color: "hover:text-violet-600 hover:border-violet-300",
+      activeBg: "bg-violet-50 text-violet-600 border-violet-400/80 shadow-sm",
+      inactiveBg: "text-slate-500 bg-white border-slate-200 hover:bg-slate-50 hover:text-slate-800",
+    },
     {
       id: "x" as Platform,
       name: "X (Twitter)",
@@ -44,7 +52,7 @@ export default function PlatformTabs({ activePlatform, onChange }: PlatformTabsP
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 w-full" id="platform-tabs-container">
+    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 w-full" id="platform-tabs-container">
       {tabs.map((tab) => {
         const Icon = tab.icon;
         const isActive = activePlatform === tab.id;

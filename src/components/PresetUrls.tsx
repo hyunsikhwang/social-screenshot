@@ -7,6 +7,24 @@ interface PresetUrlsProps {
 }
 
 const PRESETS: Record<Platform, { label: string; url: string }[]> = {
+  auto: [
+    {
+      label: "SpaceX Launch (X)",
+      url: "https://x.com/SpaceX/status/1801229789311094943",
+    },
+    {
+      label: "Telegram Tips (TG)",
+      url: "https://t.me/s/telegram/252",
+    },
+    {
+      label: "MKBHD Video (YT-Thumb)",
+      url: "https://www.youtube.com/watch?v=dtp6b76pMak",
+    },
+    {
+      label: "MKBHD Community (YT-Post)",
+      url: "https://www.youtube.com/post/UgkxvC2p1bXitU0L6P779A9S9h0zVlUuD_Oa",
+    },
+  ],
   x: [
     {
       label: "SpaceX Starship Launch",

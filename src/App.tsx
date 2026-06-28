@@ -27,20 +27,39 @@ import HistoryPanel from "./components/HistoryPanel";
 // Gradient configurations for the backdrop preview
 const GRADIENTS = [
   { id: "none", name: "없음 (Clean RAW)", class: "bg-slate-950/20 border border-slate-800" },
-  { id: "aurora", name: "Aurora Teal", class: "bg-gradient-to-tr from-teal-400 via-emerald-400 to-cyan-500" },
-  { id: "sunset", name: "Sunset Glow", class: "bg-gradient-to-tr from-amber-500 via-rose-500 to-purple-600" },
-  { id: "cosmic", name: "Cosmic Purple", class: "bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500" },
+  { id: "silver", name: "Classic Silver", class: "bg-gradient-to-tr from-zinc-300 via-slate-200 to-neutral-300" },
+  { id: "charcoal", name: "Cool Charcoal", class: "bg-gradient-to-tr from-slate-800 via-zinc-700 to-slate-900" },
+  { id: "cloud", name: "Soft Cloud", class: "bg-gradient-to-tr from-neutral-100 via-slate-100 to-zinc-200" },
+  { id: "midnight", name: "Midnight Gray", class: "bg-gradient-to-tr from-slate-950 via-slate-900 to-zinc-800" },
   { id: "deep", name: "Deep Space", class: "bg-gradient-to-tr from-slate-900 via-slate-850 to-slate-700" },
-  { id: "neon", name: "Neon Blue", class: "bg-gradient-to-tr from-cyan-400 via-blue-500 to-indigo-600" },
-  { id: "sweet", name: "Sweet Macaron", class: "bg-gradient-to-tr from-pink-300 via-purple-300 to-indigo-300" },
+  { id: "aurora", name: "Aurora Teal", class: "bg-gradient-to-tr from-teal-400 via-emerald-400 to-cyan-500" },
 ];
+
+// Helper to detect platform from URL
+const detectPlatform = (urlStr: string): Platform | null => {
+  const clean = urlStr.toLowerCase().trim();
+  if (!clean) return null;
+  if (clean.includes("x.com") || clean.includes("twitter.com")) {
+    return "x";
+  }
+  if (clean.includes("youtube.com") || clean.includes("youtu.be")) {
+    if (clean.includes("/post/") || clean.includes("/community") || clean.includes("/backstage")) {
+      return "youtube";
+    }
+    return "youtube_thumb";
+  }
+  if (clean.includes("t.me") || clean.includes("telegram.me") || clean.includes("telegram.dog")) {
+    return "telegram";
+  }
+  return null;
+};
 
 export default function App() {
   // Input Form States
   const [url, setUrl] = useState("");
-  const [platform, setPlatform] = useState<Platform>("x");
+  const [platform, setPlatform] = useState<Platform>("auto");
   const [theme, setTheme] = useState<Theme>("dark");
-  const [selectedGradient, setSelectedGradient] = useState("cosmic");
+  const [selectedGradient, setSelectedGradient] = useState("silver");
 
   // Status and Result States
   const [isLoading, setIsLoading] = useState(false);
@@ -75,11 +94,35 @@ export default function App() {
 
   // Save history to local storage when changed
   const saveHistory = (newHistory: ScreenshotHistoryItem[]) => {
-    setHistory(newHistory);
-    try {
-      localStorage.setItem("screenshot_history", JSON.stringify(newHistory));
-    } catch (e) {
-      console.error("Failed to save screenshot history", e);
+    let currentHistory = [...newHistory];
+    setHistory(currentHistory);
+    
+    // Attempt saving to localStorage with fallback for quota issues
+    while (currentHistory.length > 0) {
+      try {
+        localStorage.setItem("screenshot_history", JSON.stringify(currentHistory));
+        break; // Successfully saved!
+      } catch (e: any) {
+        // If quota exceeded, discard the oldest item and try again
+        const isQuotaError = e.name === "QuotaExceededError" || 
+                             e.name === "NS_ERROR_DOM_QUOTA_REACHED" || 
+                             e.code === 22 || 
+                             e.code === 1014;
+        if (isQuotaError) {
+          console.warn("Local storage quota exceeded. Pruning oldest screenshot history item.");
+          currentHistory.pop(); // Remove the oldest item (last item in list)
+          setHistory(currentHistory); // Update state to match what was actually saved
+        } else {
+          console.error("Failed to save screenshot history due to another error", e);
+          break;
+        }
+      }
+    }
+
+    if (currentHistory.length === 0 && newHistory.length > 0) {
+      try {
+        localStorage.removeItem("screenshot_history");
+      } catch (e) {}
     }
   };
 
@@ -156,7 +199,7 @@ export default function App() {
       const historyItem: ScreenshotHistoryItem = {
         id: Date.now().toString(),
         url: url.trim(),
-        platform,
+        platform: data.platform || platform,
         theme,
         timestamp: new Date().toISOString(),
         imageUrl: data.image,
@@ -164,7 +207,7 @@ export default function App() {
         normalizedUrl: data.normalizedUrl,
       };
 
-      const updatedHistory = [historyItem, ...history.filter((h) => h.url !== url.trim())].slice(0, 20);
+      const updatedHistory = [historyItem, ...history.filter((h) => h.url !== url.trim())].slice(0, 6);
       saveHistory(updatedHistory);
     } catch (err: any) {
       console.error(err);
@@ -248,35 +291,29 @@ export default function App() {
   // Auto-detect platform when pasting URL
   const handleUrlChange = (val: string) => {
     setUrl(val);
-    const lowercaseVal = val.toLowerCase();
-    if (lowercaseVal.includes("x.com") || lowercaseVal.includes("twitter.com")) {
-      setPlatform("x");
-    } else if (lowercaseVal.includes("youtube.com") || lowercaseVal.includes("youtu.be")) {
-      if (lowercaseVal.includes("/post/") || lowercaseVal.includes("/community")) {
-        setPlatform("youtube");
-      } else {
-        setPlatform("youtube_thumb");
+    if (platform !== "auto") {
+      const detected = detectPlatform(val);
+      if (detected) {
+        setPlatform(detected);
       }
-    } else if (lowercaseVal.includes("t.me")) {
-      setPlatform("telegram");
     }
   };
 
   const activeGradientClass = GRADIENTS.find((g) => g.id === selectedGradient)?.class || GRADIENTS[0].class;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col selection:bg-indigo-500/10 selection:text-indigo-800">
+    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col selection:bg-slate-200 selection:text-slate-900">
       {/* Sleek Top Banner */}
       <header className="border-b border-slate-200/80 bg-white/80 backdrop-blur-md sticky top-0 z-50 shadow-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-gradient-to-tr from-indigo-500 to-purple-600 rounded-xl shadow-lg shadow-indigo-500/20">
+            <div className="p-2.5 bg-slate-800 rounded-xl shadow-sm border border-slate-700">
               <Camera className="w-5 h-5 text-white" />
             </div>
             <div>
               <h1 className="text-lg font-bold font-display tracking-tight text-slate-900 flex items-center gap-2">
                 Social Screenshot Studio
-                <span className="text-[10px] bg-indigo-50 text-indigo-600 border border-indigo-100 px-1.5 py-0.5 rounded font-mono font-medium">
+                <span className="text-[10px] bg-slate-100 text-slate-700 border border-slate-200 px-1.5 py-0.5 rounded font-mono font-medium">
                   v2.0
                 </span>
               </h1>
@@ -306,7 +343,7 @@ export default function App() {
           <div className="bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-6 shadow-sm space-y-5 sm:space-y-6">
             <div className="space-y-1">
               <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-indigo-500" />
+                <Sparkles className="w-4 h-4 text-slate-600" />
                 스크린샷 생성기
               </h2>
               <p className="text-xs text-slate-500">
@@ -334,7 +371,9 @@ export default function App() {
                     value={url}
                     onChange={(e) => handleUrlChange(e.target.value)}
                     placeholder={
-                      platform === "x"
+                      platform === "auto"
+                        ? "여기에 소셜 미디어 링크를 붙여넣으세요 (자동 감지)"
+                        : platform === "x"
                         ? "https://x.com/username/status/1234567890"
                         : platform === "youtube"
                         ? "https://www.youtube.com/post/Ugkx..."
@@ -342,19 +381,43 @@ export default function App() {
                         ? "https://www.youtube.com/watch?v=dtp6b76pMak"
                         : "https://t.me/s/channel/123 (또는 t.me/channel/123)"
                     }
-                    className="w-full bg-slate-50 border border-slate-200 text-slate-900 placeholder-slate-400 rounded-xl py-3 pl-4 pr-10 text-sm focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 transition-all font-mono"
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-900 placeholder-slate-400 rounded-xl py-3 pl-4 pr-10 text-sm focus:outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-500/15 transition-all font-mono"
                     required
                   />
                   <div className="absolute right-3.5 top-3.5 text-slate-400">
-                    {platform === "x" && <Twitter className="w-4 h-4" />}
-                    {platform === "youtube" && <Youtube className="w-4 h-4" />}
-                    {platform === "youtube_thumb" && <Image className="w-4 h-4 text-red-500" />}
-                    {platform === "telegram" && <Send className="w-4 h-4" />}
+                    {(() => {
+                      const det = detectPlatform(url);
+                      const current = platform === "auto" ? det : platform;
+                      if (current === "x") return <Twitter className="w-4 h-4 text-sky-500" />;
+                      if (current === "youtube") return <Youtube className="w-4 h-4 text-rose-500" />;
+                      if (current === "youtube_thumb") return <Image className="w-4 h-4 text-red-500" />;
+                      if (current === "telegram") return <Send className="w-4 h-4 text-cyan-500" />;
+                      return <Sparkles className="w-4 h-4 text-violet-500 animate-pulse" />;
+                    })()}
                   </div>
                 </div>
 
+                {/* Real-time platform auto-detection feedback pill */}
+                {(() => {
+                  if (platform !== "auto") return null;
+                  const det = detectPlatform(url);
+                  if (!det) return null;
+                  return (
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-violet-600 bg-violet-50/50 border border-violet-100 rounded-lg px-3 py-2 w-fit mt-1.5 animate-fade-in">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>플랫폼 감지 결과:</span>
+                      <span className="font-bold underline decoration-violet-300">
+                        {det === "x" && "X (Twitter)"}
+                        {det === "youtube" && "YouTube 커뮤니티 포스트"}
+                        {det === "youtube_thumb" && "YouTube 비디오 썸네일"}
+                        {det === "telegram" && "Telegram 포스트"}
+                      </span>
+                    </div>
+                  );
+                })()}
+
                 {/* Direct Presets Helper */}
-                <PresetUrls platform={platform} onSelect={setUrl} />
+                <PresetUrls platform={platform} onSelect={handleUrlChange} />
               </div>
 
               {/* Layout Customization (Theme & Background) */}
@@ -371,7 +434,7 @@ export default function App() {
                       onClick={() => setTheme("light")}
                       className={`flex items-center justify-center gap-2 py-2.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
                         theme === "light"
-                          ? "bg-indigo-50 text-indigo-600 border-indigo-400/60 shadow-xs"
+                          ? "bg-slate-900 text-white border-slate-950 shadow-sm"
                           : "text-slate-500 border-slate-200 hover:bg-slate-50 bg-white"
                       }`}
                     >
@@ -384,7 +447,7 @@ export default function App() {
                       onClick={() => setTheme("dark")}
                       className={`flex items-center justify-center gap-2 py-2.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
                         theme === "dark"
-                          ? "bg-indigo-50 text-indigo-600 border-indigo-400/60 shadow-xs"
+                          ? "bg-slate-900 text-white border-slate-950 shadow-sm"
                           : "text-slate-500 border-slate-200 hover:bg-slate-50 bg-white"
                       }`}
                     >
@@ -404,7 +467,7 @@ export default function App() {
                       id="bg-gradient-select"
                       value={selectedGradient}
                       onChange={(e) => setSelectedGradient(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 text-xs focus:outline-none focus:border-indigo-500 cursor-pointer appearance-none shadow-xs"
+                      className="w-full bg-slate-50 border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 text-xs focus:outline-none focus:border-slate-500 cursor-pointer appearance-none shadow-xs"
                     >
                       {GRADIENTS.map((g) => (
                         <option key={g.id} value={g.id}>
@@ -424,7 +487,7 @@ export default function App() {
                 type="submit"
                 id="capture-submit-btn"
                 disabled={isLoading}
-                className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg shadow-indigo-500/20 disabled:opacity-50 disabled:shadow-none hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 cursor-pointer text-sm"
+                className="w-full bg-slate-900 hover:bg-slate-850 text-white font-bold py-3.5 px-4 rounded-xl shadow-sm disabled:opacity-50 disabled:shadow-none hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 cursor-pointer text-sm"
               >
                 {isLoading ? (
                   <>
@@ -477,7 +540,7 @@ export default function App() {
             
             <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3 shrink-0">
               <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                <Camera className="w-4 h-4 text-indigo-500" />
+                <Camera className="w-4 h-4 text-slate-600" />
                 캔버스 프리뷰 워크스페이스
               </h3>
               <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono">
@@ -491,12 +554,12 @@ export default function App() {
             <div className="flex-1 flex items-center justify-center bg-slate-50 rounded-2xl p-4 sm:p-8 overflow-hidden border border-slate-150 relative">
               
               {/* Ambient backdrop subtle background glow */}
-              <div className="absolute inset-0 bg-radial from-indigo-500/5 via-transparent to-transparent pointer-events-none" />
+              <div className="absolute inset-0 bg-radial from-slate-500/5 via-transparent to-transparent pointer-events-none" />
 
               {/* SCENARIO A: No Image, Idle State */}
               {!isLoading && !activeScreenshot && (
                 <div className="text-center max-w-[340px] py-10" id="preview-idle-state">
-                  <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 flex items-center justify-center mx-auto mb-4 text-indigo-500 shadow-sm animate-pulse">
+                  <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 flex items-center justify-center mx-auto mb-4 text-slate-600 shadow-sm animate-pulse">
                     <Camera className="w-8 h-8" />
                   </div>
                   <h4 className="text-base font-bold text-slate-800">포스트 링크를 입력하세요</h4>
@@ -511,13 +574,13 @@ export default function App() {
                 <div className="w-full max-w-md flex flex-col items-center justify-center py-10" id="preview-loading-state">
                   {/* Glowing spinner */}
                   <div className="relative mb-8">
-                    <div className="w-16 h-16 rounded-full border-4 border-indigo-500/20 border-t-indigo-500 animate-spin" />
-                    <div className="absolute inset-0 w-16 h-16 rounded-full border-4 border-purple-500/10 border-b-purple-500 animate-pulse" />
+                    <div className="w-16 h-16 rounded-full border-4 border-slate-500/20 border-t-slate-700 animate-spin" />
+                    <div className="absolute inset-0 w-16 h-16 rounded-full border-4 border-slate-300/15 border-b-slate-400 animate-pulse" />
                   </div>
 
                   {/* Progressive Simulation Logger */}
                   <div className="w-full bg-slate-900 border border-slate-800 rounded-xl p-4 font-mono text-[11px] leading-relaxed text-slate-300 space-y-2.5 shadow-md">
-                    <div className="flex items-center justify-between text-[10px] text-indigo-400 border-b border-slate-800 pb-1.5 mb-1.5 font-bold uppercase tracking-wider">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 border-b border-slate-800 pb-1.5 mb-1.5 font-bold uppercase tracking-wider">
                       <span>Server Terminal Log</span>
                       <span className="animate-pulse">● Running</span>
                     </div>
@@ -529,7 +592,7 @@ export default function App() {
                         <div
                           key={idx}
                           className={`flex items-start gap-2.5 transition-opacity duration-300 ${
-                            isPast ? "text-slate-500" : isCurrent ? "text-indigo-400 font-semibold" : "text-slate-700"
+                            isPast ? "text-slate-500" : isCurrent ? "text-slate-300 font-semibold" : "text-slate-700"
                           }`}
                         >
                           <span className="shrink-0">{isPast ? "✓" : isCurrent ? "▶" : "•"}</span>
@@ -582,12 +645,12 @@ export default function App() {
                     id="copy-to-clipboard-btn"
                     onClick={handleCopyToClipboard}
                     disabled={copyStatus === "loading"}
-                    className={`flex items-center justify-center gap-2 py-3 px-4 text-white font-bold rounded-xl shadow-lg text-xs tracking-wide transition-all cursor-pointer ${
+                    className={`flex items-center justify-center gap-2 py-3 px-4 text-white font-bold rounded-xl shadow-md text-xs tracking-wide transition-all cursor-pointer ${
                       copyStatus === "copied"
                         ? "bg-emerald-600 hover:bg-emerald-700"
                         : copyStatus === "error"
                         ? "bg-rose-600 hover:bg-rose-700"
-                        : "bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/15"
+                        : "bg-slate-700 hover:bg-slate-800 shadow-slate-700/15"
                     }`}
                   >
                     {copyStatus === "loading" ? (

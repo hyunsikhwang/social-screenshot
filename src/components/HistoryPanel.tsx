@@ -1,5 +1,5 @@
 import React from "react";
-import { Trash2, Download, Copy, ExternalLink, Calendar, Twitter, Youtube, Send } from "lucide-react";
+import { Trash2, Download, Copy, ExternalLink, Calendar, Twitter, Youtube, Send, Image } from "lucide-react";
 import { ScreenshotHistoryItem } from "../types";
 
 interface HistoryPanelProps {
@@ -35,6 +35,8 @@ export default function HistoryPanel({
         return <Twitter className="w-3.5 h-3.5 text-sky-500" />;
       case "youtube":
         return <Youtube className="w-3.5 h-3.5 text-rose-500" />;
+      case "youtube_thumb":
+        return <Image className="w-3.5 h-3.5 text-red-500" />;
       case "telegram":
         return <Send className="w-3.5 h-3.5 text-cyan-500" />;
       default:
@@ -48,6 +50,8 @@ export default function HistoryPanel({
         return "X (Twitter)";
       case "youtube":
         return "YouTube Post";
+      case "youtube_thumb":
+        return "YouTube Thumb";
       case "telegram":
         return "Telegram";
       default:
@@ -59,7 +63,7 @@ export default function HistoryPanel({
     <div className="space-y-4" id="history-panel-container">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Calendar className="w-4 h-4 text-indigo-500" />
+          <Calendar className="w-4 h-4 text-slate-500" />
           <h3 className="text-sm font-bold text-slate-700">최근 생성 기록 ({history.length})</h3>
         </div>
         <button
@@ -115,7 +119,7 @@ export default function HistoryPanel({
                 <button
                   id={`history-copy-btn-${item.id}`}
                   onClick={() => onCopy(item.imageUrl)}
-                  className="text-[11px] text-slate-600 hover:text-indigo-600 active:text-indigo-700 font-bold flex items-center gap-1 min-h-[28px] px-1.5 rounded-md hover:bg-slate-100/60 transition-colors"
+                  className="text-[11px] text-slate-600 hover:text-slate-800 active:text-slate-900 font-bold flex items-center gap-1 min-h-[28px] px-1.5 rounded-md hover:bg-slate-100/60 transition-colors"
                   title="클립보드에 복사"
                 >
                   <Copy className="w-3.5 h-3.5" />
