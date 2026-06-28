@@ -16,6 +16,7 @@ import {
   History,
   Sparkles,
   Share2,
+  Image,
 } from "lucide-react";
 
 import { Platform, Theme, ScreenshotHistoryItem } from "./types";
@@ -234,6 +235,8 @@ export default function App() {
     let text = "멋진 스크린샷 카드로 캡처했습니다. 📸✨";
     if (platform === "youtube") {
       text = "YouTube 커뮤니티 포스트를 멋진 스크린샷 카드로 생성했습니다. 📸✨";
+    } else if (platform === "youtube_thumb") {
+      text = "YouTube 비디오 썸네일을 멋진 스크린샷 카드로 생성했습니다. 📸✨";
     } else if (platform === "telegram") {
       text = "Telegram 포스트를 멋진 스크린샷 카드로 생성했습니다. 📸✨";
     }
@@ -249,7 +252,11 @@ export default function App() {
     if (lowercaseVal.includes("x.com") || lowercaseVal.includes("twitter.com")) {
       setPlatform("x");
     } else if (lowercaseVal.includes("youtube.com") || lowercaseVal.includes("youtu.be")) {
-      setPlatform("youtube");
+      if (lowercaseVal.includes("/post/") || lowercaseVal.includes("/community")) {
+        setPlatform("youtube");
+      } else {
+        setPlatform("youtube_thumb");
+      }
     } else if (lowercaseVal.includes("t.me")) {
       setPlatform("telegram");
     }
@@ -331,6 +338,8 @@ export default function App() {
                         ? "https://x.com/username/status/1234567890"
                         : platform === "youtube"
                         ? "https://www.youtube.com/post/Ugkx..."
+                        : platform === "youtube_thumb"
+                        ? "https://www.youtube.com/watch?v=dtp6b76pMak"
                         : "https://t.me/s/channel/123 (또는 t.me/channel/123)"
                     }
                     className="w-full bg-slate-50 border border-slate-200 text-slate-900 placeholder-slate-400 rounded-xl py-3 pl-4 pr-10 text-sm focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 transition-all font-mono"
@@ -339,6 +348,7 @@ export default function App() {
                   <div className="absolute right-3.5 top-3.5 text-slate-400">
                     {platform === "x" && <Twitter className="w-4 h-4" />}
                     {platform === "youtube" && <Youtube className="w-4 h-4" />}
+                    {platform === "youtube_thumb" && <Image className="w-4 h-4 text-red-500" />}
                     {platform === "telegram" && <Send className="w-4 h-4" />}
                   </div>
                 </div>
@@ -612,7 +622,7 @@ export default function App() {
                       X (Twitter) 즉시 연동 공유
                     </div>
                     <span className="text-[10px] bg-slate-200/60 text-slate-600 px-2 py-0.5 rounded-full font-semibold">
-                      {platform === "x" ? "X Post" : platform === "youtube" ? "YouTube" : "Telegram"}
+                      {platform === "x" ? "X Post" : platform === "youtube" ? "YouTube Post" : platform === "youtube_thumb" ? "YouTube Thumbnail" : "Telegram"}
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-500 leading-relaxed">

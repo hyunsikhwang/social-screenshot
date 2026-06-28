@@ -1,4 +1,4 @@
-export type Platform = "x" | "youtube" | "telegram";
+export type Platform = "x" | "youtube" | "telegram" | "youtube_thumb";
 
 export type Theme = "light" | "dark";
 

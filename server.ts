@@ -505,6 +505,290 @@ async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "l
   }
 }
 
+// HTML Escaper
+function escapeHtml(unsafe: string): string {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// Youtube Video ID Extractor
+function extractYoutubeVideoId(url: string): string | null {
+  if (!url) return null;
+  const candidate = url.trim();
+
+  // 1. youtu.be/videoId
+  let match = candidate.match(/(?:https?:\/\/)?(?:www\.)?youtu\.be\/([A-Za-z0-9_-]{11})/i);
+  if (match) return match[1];
+
+  // 2. youtube.com/watch?v=videoId
+  match = candidate.match(/(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?([^#]+)/i);
+  if (match) {
+    try {
+      const urlObj = new URL(candidate);
+      const vid = urlObj.searchParams.get("v");
+      if (vid) return vid;
+    } catch (e) {
+      // Fallback
+    }
+  }
+
+  // 3. youtube.com/shorts/videoId
+  match = candidate.match(/(?:https?:\/\/)?(?:www\.)?youtube\.com\/shorts\/([A-Za-z0-9_-]{11})/i);
+  if (match) return match[1];
+
+  // 4. youtube.com/embed/videoId
+  match = candidate.match(/(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([A-Za-z0-9_-]{11})/i);
+  if (match) return match[1];
+
+  return null;
+}
+
+// Playwright Capture for YouTube Thumbnail Custom Card
+async function captureYoutubeThumbnail(
+  videoUrl: string,
+  theme: "light" | "dark" = "light"
+): Promise<{ buffer: Buffer; title: string; watchUrl: string; videoId: string }> {
+  const videoId = extractYoutubeVideoId(videoUrl);
+  if (!videoId) {
+    throw new Error("올바른 유튜브 영상 URL 형식이 아닙니다.");
+  }
+
+  const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  
+  // oEmbed to get the beautiful title
+  let title = "YouTube Video";
+  try {
+    const oembedUrl = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(watchUrl)}`;
+    const response = await fetch(oembedUrl);
+    if (response.ok) {
+      const data = await response.json() as any;
+      if (data && data.title) {
+        title = data.title;
+      }
+    }
+  } catch (e) {
+    console.error("Failed to fetch youtube title via oembed", e);
+  }
+
+  // Choose the best quality thumbnail
+  let thumbUrl = `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`;
+  try {
+    const res = await fetch(thumbUrl, { method: "HEAD" });
+    if (res.status !== 200) {
+      thumbUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    }
+  } catch (e) {
+    thumbUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+  }
+
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+  });
+
+  const context = await browser.newContext({
+    viewport: { width: 1000, height: 1000 },
+    deviceScaleFactor: 2,
+    colorScheme: theme,
+    locale: "ko-KR",
+  });
+
+  const page = await context.newPage();
+
+  const isDark = theme === "dark";
+  const bgColor = isDark ? "#121212" : "#ffffff";
+  const textColor = isDark ? "#f3f4f6" : "#111827";
+  const subTextColor = isDark ? "#9ca3af" : "#4b5563";
+  const borderColor = isDark ? "#2d2d2d" : "#e5e7eb";
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        
+        body {
+          margin: 0;
+          padding: 40px;
+          background: transparent;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          min-height: 100vh;
+          font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        }
+
+        .card {
+          width: 580px;
+          background: ${bgColor};
+          border: 1px solid ${borderColor};
+          border-radius: 24px;
+          padding: 24px;
+          box-shadow: 0 12px 40px rgba(0, 0, 0, ${isDark ? "0.4" : "0.08"});
+          box-sizing: border-box;
+          overflow: hidden;
+        }
+
+        .thumbnail-container {
+          position: relative;
+          width: 100%;
+          aspect-ratio: 16 / 9;
+          border-radius: 16px;
+          overflow: hidden;
+          background-color: #000;
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+        }
+
+        .thumbnail-image {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+
+        .play-overlay {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          width: 64px;
+          height: 44px;
+          background: rgba(229, 9, 20, 0.95);
+          border-radius: 12px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 6px 20px rgba(229, 9, 20, 0.4);
+        }
+
+        .play-triangle {
+          width: 0;
+          height: 0;
+          border-top: 8px solid transparent;
+          border-left: 14px solid #ffffff;
+          border-bottom: 8px solid transparent;
+          margin-left: 3px;
+        }
+
+        .info-section {
+          margin-top: 20px;
+        }
+
+        .platform-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          background: ${isDark ? "#2a0f10" : "#fff1f2"};
+          color: #ef4444;
+          font-size: 11px;
+          font-weight: 700;
+          padding: 4px 10px;
+          border-radius: 9999px;
+          border: 1px solid ${isDark ? "#4c1d1d" : "#fecaca"};
+          margin-bottom: 12px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+
+        .title {
+          font-size: 18px;
+          font-weight: 850;
+          color: ${textColor};
+          line-height: 1.45;
+          margin: 0 0 12px 0;
+          word-break: break-word;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+
+        .footer {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          border-top: 1px solid ${borderColor};
+          padding-top: 12px;
+          margin-top: 12px;
+        }
+
+        .author-info {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .author-avatar {
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          background: #ef4444;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: white;
+          font-size: 10px;
+          font-weight: bold;
+        }
+
+        .author-name {
+          font-size: 12px;
+          font-weight: 600;
+          color: ${subTextColor};
+        }
+
+        .domain {
+          font-size: 11px;
+          font-weight: 500;
+          color: ${subTextColor};
+          font-family: monospace;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="card" id="youtube-thumb-card">
+        <div class="thumbnail-container">
+          <img class="thumbnail-image" src="${thumbUrl}" />
+          <div class="play-overlay">
+            <div class="play-triangle"></div>
+          </div>
+        </div>
+        <div class="info-section">
+          <div class="platform-badge">
+            <svg style="width:12px;height:12px" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.163a3.003 3.003 0 0 0-2.11-2.11C19.518 3.5 12 3.5 12 3.5s-7.518 0-9.388.553a3.003 3.003 0 0 0-2.11 2.11C0 8.033 0 12 0 12s0 3.967.502 5.837a3.003 3.003 0 0 0 2.11 2.11c1.87.553 9.388.553 9.388.553s7.518 0 9.388-.553a3.003 3.003 0 0 0 2.11-2.11C24 15.967 24 12 24 12s0-3.967-.502-5.837zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+            YouTube Video
+          </div>
+          <h1 class="title">${escapeHtml(title)}</h1>
+          <div class="footer">
+            <div class="author-info">
+              <div class="author-avatar">YT</div>
+              <span class="author-name">Creator Media</span>
+            </div>
+            <span class="domain">youtube.com</span>
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  await page.setContent(htmlContent);
+  await page.waitForLoadState("networkidle");
+  await page.waitForTimeout(500);
+
+  const cardElement = page.locator("#youtube-thumb-card");
+  const buffer = await cardElement.screenshot({ type: "png", omitBackground: true });
+
+  await browser.close();
+
+  return { buffer, title, watchUrl, videoId };
+}
+
 // Start Server Setup
 async function startServer() {
   const app = express();
@@ -530,6 +814,9 @@ async function startServer() {
 
     try {
       let buffer: Buffer;
+      let finalUrl = url;
+      let finalPostId = "post";
+      let title = "";
 
       if (platform === "x") {
         const normalized = normalizeXPostUrl(url);
@@ -537,23 +824,31 @@ async function startServer() {
           return res.status(400).json({ error: "올바른 X 게시물 URL 형식이 아닙니다." });
         }
         buffer = await captureXPost(normalized, selectedTheme);
+        finalUrl = normalized;
+        finalPostId = extractXPostId(url) || "post";
       } else if (platform === "youtube") {
         buffer = await captureYoutubePost(url, selectedTheme);
       } else if (platform === "telegram") {
         buffer = await captureTelegramPost(url, selectedTheme);
+      } else if (platform === "youtube_thumb") {
+        const result = await captureYoutubeThumbnail(url, selectedTheme);
+        buffer = result.buffer;
+        finalUrl = result.watchUrl;
+        finalPostId = result.videoId;
+        title = result.title;
       } else {
         return res.status(400).json({ error: "지원하지 않는 플랫폼입니다." });
       }
 
       const base64Image = buffer.toString("base64");
-      const postId = platform === "x" ? (extractXPostId(url) || "post") : "post";
 
       res.json({
         success: true,
         image: `data:image/png;base64,${base64Image}`,
-        filename: `${platform}-post-${postId}.png`,
-        postId,
-        normalizedUrl: platform === "x" ? normalizeXPostUrl(url) : url
+        filename: `${platform}-post-${finalPostId}.png`,
+        postId: finalPostId,
+        normalizedUrl: finalUrl,
+        title: title || undefined
       });
     } catch (err: any) {
       console.error("[Screenshot Error]", err);

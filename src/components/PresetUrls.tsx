@@ -27,6 +27,16 @@ const PRESETS: Record<Platform, { label: string; url: string }[]> = {
       url: "https://www.youtube.com/post/UgkxXp7bEw9vKzK9Y4aB7c8D9eF0gH1iJ2kL",
     },
   ],
+  youtube_thumb: [
+    {
+      label: "Apple Vision Pro Review (MKBHD)",
+      url: "https://www.youtube.com/watch?v=dtp6b76pMak",
+    },
+    {
+      label: "Interstellar Soundtrack Live",
+      url: "https://www.youtube.com/watch?v=4y33h81xq7M",
+    },
+  ],
   telegram: [
     {
       label: "Telegram Tips",

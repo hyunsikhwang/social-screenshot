@@ -1,5 +1,5 @@
 import React from "react";
-import { Twitter, Youtube, Send } from "lucide-react";
+import { Twitter, Youtube, Send, Image } from "lucide-react";
 import { Platform } from "../types";
 
 interface PlatformTabsProps {
@@ -26,6 +26,14 @@ export default function PlatformTabs({ activePlatform, onChange }: PlatformTabsP
       inactiveBg: "text-slate-500 bg-white border-slate-200 hover:bg-slate-50 hover:text-slate-800",
     },
     {
+      id: "youtube_thumb" as Platform,
+      name: "YouTube Thumb",
+      icon: Image,
+      color: "hover:text-red-600 hover:border-red-300",
+      activeBg: "bg-red-50 text-red-600 border-red-400/80 shadow-sm",
+      inactiveBg: "text-slate-500 bg-white border-slate-200 hover:bg-slate-50 hover:text-slate-800",
+    },
+    {
       id: "telegram" as Platform,
       name: "Telegram",
       icon: Send,
@@ -36,7 +44,7 @@ export default function PlatformTabs({ activePlatform, onChange }: PlatformTabsP
   ];
 
   return (
-    <div className="grid grid-cols-3 gap-2 w-full" id="platform-tabs-container">
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 w-full" id="platform-tabs-container">
       {tabs.map((tab) => {
         const Icon = tab.icon;
         const isActive = activePlatform === tab.id;
@@ -44,12 +52,13 @@ export default function PlatformTabs({ activePlatform, onChange }: PlatformTabsP
           <button
             key={tab.id}
             id={`tab-btn-${tab.id}`}
+            type="button"
             onClick={() => onChange(tab.id)}
-            className={`flex flex-col sm:flex-row items-center justify-center gap-2 py-3 px-2 sm:px-4 rounded-xl border text-sm font-semibold transition-all duration-300 ${
+            className={`flex flex-col sm:flex-row items-center justify-center gap-2 py-3 px-2 sm:px-3 rounded-xl border text-xs sm:text-sm font-semibold transition-all duration-300 ${
               isActive ? tab.activeBg : tab.inactiveBg
             } ${tab.color} cursor-pointer`}
           >
-            <Icon className="w-5 h-5 shrink-0" />
+            <Icon className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
             <span className="truncate">{tab.name}</span>
           </button>
         );
