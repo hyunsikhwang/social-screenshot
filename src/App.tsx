@@ -58,7 +58,7 @@ export default function App() {
   // Input Form States
   const [url, setUrl] = useState("");
   const [platform, setPlatform] = useState<Platform>("auto");
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [theme, setTheme] = useState<Theme>("light");
   const [selectedGradient, setSelectedGradient] = useState("silver");
 
   // Status and Result States

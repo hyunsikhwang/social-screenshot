@@ -513,11 +513,14 @@ async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "li
 }
 
 async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "light"): Promise<Buffer> {
+  // Strip query parameters and hash fragments (especially common on mobile devices/browsers)
+  let cleanUrl = postUrl.trim().split("?")[0].split("#")[0];
+
   try {
     const browser = await launchBrowser(["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]);
 
     const context = await browser.newContext({
-      viewport: { width: 1920, height: 1080 },
+      viewport: { width: 1280, height: 1080 },
       deviceScaleFactor: 3,
       locale: "ko-KR",
     });
@@ -525,17 +528,16 @@ async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "l
     const page = await context.newPage();
 
     // Ensure protocol is present and normalize mobile/alternative telegram domains
-    let url = postUrl.trim();
-    if (!/^https?:\/\//i.test(url)) {
-      url = `https://${url}`;
+    if (!/^https?:\/\//i.test(cleanUrl)) {
+      cleanUrl = `https://${cleanUrl}`;
     }
-    url = url.replace(/telegram\.(me|dog)/i, "t.me");
+    cleanUrl = cleanUrl.replace(/telegram\.(me|dog)/i, "t.me");
 
     // Handle t.me link redirection to public preview (s/)
-    if (url.includes("t.me/") && !url.includes("t.me/s/")) {
-      const parts = url.split("t.me/");
+    if (cleanUrl.includes("t.me/") && !cleanUrl.includes("t.me/s/")) {
+      const parts = cleanUrl.split("t.me/");
       if (parts.length === 2) {
-        url = `https://t.me/s/${parts[1]}`;
+        cleanUrl = `https://t.me/s/${parts[1]}`;
       }
     }
 
@@ -543,7 +545,7 @@ async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "l
     const textColor = theme === "dark" ? "#ffffff" : "#0f172a";
 
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.goto(cleanUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
 
       const cssContent = `
         @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
@@ -579,13 +581,22 @@ async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "l
 
       await page.addStyleTag({ content: cssContent });
 
-      const urlParts = url.split("/");
+      const urlParts = cleanUrl.split("/");
       const postIdentifier = urlParts.slice(-2).join("/"); // e.g., "banjang9/3895"
       const selector = `[data-post="${postIdentifier}"]`;
 
       await page.waitForSelector(selector, { timeout: 15000 });
 
-      const element = page.locator(selector);
+      // Attempt to target the inner .tgme_widget_message card to crop out wide margins
+      let element = page.locator(selector).locator(".tgme_widget_message").first();
+      try {
+        if (!(await element.isVisible({ timeout: 2000 }))) {
+          element = page.locator(selector);
+        }
+      } catch (e) {
+        element = page.locator(selector);
+      }
+
       await element.evaluate((el, { bgColor, theme }) => {
         // @ts-ignore
         el.style.background = bgColor;
@@ -625,7 +636,7 @@ async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "l
       const elementHeight = (!boundingBox || boundingBox.height === 0) ? 2000 : Math.ceil(boundingBox.height);
 
       await page.setViewportSize({
-        width: 1920,
+        width: 1280,
         height: elementHeight + 300,
       });
 
@@ -650,7 +661,7 @@ async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "l
     }
   } catch (error) {
     console.warn("[captureTelegramPost] Playwright failed, falling back to Microlink:", error);
-    return await captureViaMicrolink(postUrl, ".tgme_widget_message", theme);
+    return await captureViaMicrolink(cleanUrl, ".tgme_widget_message", theme);
   }
 }
 
