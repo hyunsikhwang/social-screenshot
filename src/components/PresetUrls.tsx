@@ -14,7 +14,7 @@ const PRESETS: Record<Platform, { label: string; url: string }[]> = {
     },
     {
       label: "Telegram Tips (TG)",
-      url: "https://t.me/s/telegram/252",
+      url: "https://telegram.me/s/telegram/252",
     },
     {
       label: "MKBHD Video (YT-Thumb)",
@@ -58,11 +58,11 @@ const PRESETS: Record<Platform, { label: string; url: string }[]> = {
   telegram: [
     {
       label: "Telegram Tips",
-      url: "https://t.me/s/telegram/252",
+      url: "https://telegram.me/s/telegram/252",
     },
     {
       label: "Duurov's Channel (Pavel Durov)",
-      url: "https://t.me/s/durov/251",
+      url: "https://telegram.me/s/durov/251",
     },
   ],
 };

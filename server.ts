@@ -30,11 +30,25 @@ const __filename = resolvedFilename;
 const __dirname = resolvedDirname;
 
 // Helper to launch Chromium and dynamically install it if missing
-async function launchBrowser(args: string[] = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]) {
+async function launchBrowser(args: string[] = []) {
+  const baseArgs = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"];
+  const finalArgs = args.length > 0 ? args : baseArgs;
+
+  // Always append critical performance & memory-saving flags for Cloud Run / serverless compatibility
+  const optimizedArgs = Array.from(new Set([
+    ...finalArgs,
+    "--disable-setuid-sandbox",
+    "--no-zygote",
+    "--no-first-run",
+    "--disable-accelerated-2d-canvas",
+    "--disable-extensions",
+    "--mute-audio"
+  ]));
+
   try {
     return await chromium.launch({
       headless: true,
-      args,
+      args: optimizedArgs,
     });
   } catch (error: any) {
     const errorMsg = String(error.message || error);
@@ -138,25 +152,131 @@ function extractXPostId(url: string): string | null {
 async function captureViaMicrolink(targetUrl: string, elementSelector: string, theme: "light" | "dark"): Promise<Buffer> {
   console.log(`[Microlink Fallback] Running capture for: ${targetUrl}, selector: ${elementSelector}, theme: ${theme}`);
   
+  // Force Microlink to completely bypass its server-side screenshot cache
+  // Also append a cache-buster timestamp parameter to the destination URL
+  let targetUrlWithBuster = targetUrl;
+  try {
+    const urlObj = new URL(targetUrl);
+    urlObj.searchParams.set("_cb", Date.now().toString());
+    targetUrlWithBuster = urlObj.toString();
+  } catch (e) {
+    targetUrlWithBuster = `${targetUrl}${targetUrl.includes("?") ? "&" : "?"}_cb=${Date.now()}`;
+  }
+
   const params = new URLSearchParams({
-    url: targetUrl,
+    url: targetUrlWithBuster,
     screenshot: "true",
     "screenshot.colorScheme": theme,
     "screenshot.type": "png",
-    "screenshot.viewport.deviceScaleFactor": "2",
+    "viewport.deviceScaleFactor": "2",
+    "screenshot.omitBackground": "true",
+    force: "true", // Crucial: forces Microlink to ignore cached screenshots of the page
   });
 
   if (elementSelector) {
     params.append("screenshot.element", elementSelector);
+    params.append("element", elementSelector);
   }
 
-  // Optimize waiting conditions depending on platform url
+  // Optimize waiting conditions and viewports depending on platform url
   if (targetUrl.includes("x.com") || targetUrl.includes("twitter.com")) {
     params.append("screenshot.waitFor", "article");
-  } else if (targetUrl.includes("t.me")) {
+    params.append("waitFor", "article");
+    params.append("screenshot.delay", "3000");
+  } else if (targetUrl.includes("t.me") || targetUrl.includes("telegram.me")) {
     params.append("screenshot.waitFor", ".tgme_widget_message");
+    params.append("waitFor", ".tgme_widget_message");
+    params.append("screenshot.delay", "3000");
+    // Force mobile-sized viewport in Microlink fallback for Telegram to get perfect crops without margins
+    params.append("viewport.width", "564");
+    params.append("screenshot.fullPage", "true");
+    params.append("screenshot.omitBackground", "true");
+
+    const bgColor = theme === "dark" ? "#0b1630" : "#ffffff";
+    const textColor = theme === "dark" ? "#f8fafc" : "#0f172a";
+    const authorColor = theme === "dark" ? "#38bdf8" : "#0284c7";
+    const metaColor = theme === "dark" ? "#94a3b8" : "#64748b";
+    const borderColor = theme === "dark" ? "#1e293b" : "#e2e8f0";
+    const shadowOpacity = theme === "dark" ? "0.3" : "0.06";
+
+    const microlinkCss = `
+      @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+      @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
+
+      html, body, .tgme_widget_message_page {
+        background: transparent !important;
+        background-image: none !important;
+        color: ${textColor} !important;
+        height: auto !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+        box-sizing: border-box !important;
+      }
+      .tgme_widget_message_page > :not(.tgme_widget_message_wrap) {
+        display: none !important;
+      }
+      body, body *, .tgme_widget_message, .tgme_widget_message_text, .tgme_widget_message_author, .tgme_widget_message_meta {
+        font-family: 'Pretendard', 'Noto Sans KR', sans-serif !important;
+        letter-spacing: -0.3px !important;
+      }
+      .tgme_widget_message_wrap {
+        display: block !important;
+        width: 100% !important;
+        height: auto !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        padding: 12px !important;
+        margin: 0 !important;
+        background: transparent !important;
+        box-sizing: border-box !important;
+      }
+      .tgme_widget_message_wrap > :not(.tgme_widget_message) {
+        display: none !important;
+      }
+      .tgme_widget_message {
+        max-width: 540px !important;
+        width: 100% !important;
+        height: auto !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        margin: 0 auto !important;
+        box-sizing: border-box !important;
+        background: ${bgColor} !important;
+        border-radius: 12px !important;
+        border: 1px solid ${borderColor} !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, ${shadowOpacity}) !important;
+        flex: none !important;
+        flex-grow: 0 !important;
+        flex-shrink: 0 !important;
+      }
+      .tgme_widget_message_bubble {
+        height: auto !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        background: ${bgColor} !important;
+      }
+      .tgme_widget_message_text {
+        color: ${textColor} !important;
+      }
+      .tgme_widget_message_author, .tgme_widget_message_author * {
+        color: ${authorColor} !important;
+        font-weight: 600 !important;
+      }
+      .tgme_widget_message_meta, .tgme_widget_message_meta * {
+        color: ${metaColor} !important;
+      }
+      .tgme_widget_message_inline_button_wrap, .tgme_widget_message_inline_button, .tgme_widget_login, .tgme_widget_message_popup {
+        display: none !important;
+      }
+    `.replace(/\s+/g, " ").trim();
+
+    params.append("styles", microlinkCss);
   } else if (targetUrl.includes("render-youtube-thumb")) {
-    params.append("screenshot.waitFor", "#youtube-thumb-card");
+    params.append("screenshot.waitFor", ".card");
+    params.append("screenshot.delay", "2000");
   }
 
   const apiUrl = `https://api.microlink.io/?${params.toString()}`;
@@ -189,7 +309,7 @@ async function captureXPost(postUrl: string, theme: "light" | "dark" = "light"):
   try {
     const pageColor = theme === "light" ? "#ffffff" : "#0f1115";
     
-    const browser = await launchBrowser(["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]);
+    const browser = await launchBrowser();
 
     const context = await browser.newContext({
       viewport: { width: 1280, height: 2400 },
@@ -355,7 +475,7 @@ async function captureXPost(postUrl: string, theme: "light" | "dark" = "light"):
 
 async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "light"): Promise<Buffer> {
   try {
-    const browser = await launchBrowser(["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]);
+    const browser = await launchBrowser();
 
     const context = await browser.newContext({
       viewport: { width: 1920, height: 1080 },
@@ -513,39 +633,47 @@ async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "li
 }
 
 async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "light"): Promise<Buffer> {
-  // Strip query parameters and hash fragments (especially common on mobile devices/browsers)
-  let cleanUrl = postUrl.trim().split("?")[0].split("#")[0];
+  // 1. URL 객체를 사용해 안전하게 경로 파싱하기
+  let parsedUrl: URL;
+  try {
+    let normalizedInput = postUrl.trim();
+    if (!/^https?:\/\//i.test(normalizedInput)) {
+      normalizedInput = `https://${normalizedInput}`;
+    }
+    parsedUrl = new URL(normalizedInput);
+  } catch (e) {
+    throw new Error("올바른 URL 형식이 아닙니다.");
+  }
+
+  // 2. 경로에서 빈 세그먼트 제거하고 텔레그램 포스트 ID 및 채널 정보 가져오기
+  const pathSegments = parsedUrl.pathname.split("/").filter(Boolean);
+  const filteredSegments = pathSegments.filter(s => s.toLowerCase() !== "s");
+  if (filteredSegments.length < 2) {
+    throw new Error("올바른 텔레그램 포스트 URL 형식이 아닙니다.");
+  }
+  const channelName = filteredSegments[filteredSegments.length - 2];
+  const postId = filteredSegments[filteredSegments.length - 1];
+  const postIdentifier = `${channelName}/${postId}`; // 예: "easynoscamai/1492"
+
+  // 텔레그램 포스트 단일 임베드 URL로 표준화 (불필요한 타임라인/헤더/사이드바 등 완전 제거)
+  const embedUrl = `https://telegram.me/${postIdentifier}?embed=1${theme === "dark" ? "&dark=1" : ""}`;
 
   try {
-    const browser = await launchBrowser(["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]);
+    const browser = await launchBrowser();
 
     const context = await browser.newContext({
-      viewport: { width: 1280, height: 1080 },
+      viewport: { width: 564, height: 900 },
       deviceScaleFactor: 3,
       locale: "ko-KR",
     });
 
     const page = await context.newPage();
 
-    // Ensure protocol is present and normalize mobile/alternative telegram domains
-    if (!/^https?:\/\//i.test(cleanUrl)) {
-      cleanUrl = `https://${cleanUrl}`;
-    }
-    cleanUrl = cleanUrl.replace(/telegram\.(me|dog)/i, "t.me");
-
-    // Handle t.me link redirection to public preview (s/)
-    if (cleanUrl.includes("t.me/") && !cleanUrl.includes("t.me/s/")) {
-      const parts = cleanUrl.split("t.me/");
-      if (parts.length === 2) {
-        cleanUrl = `https://t.me/s/${parts[1]}`;
-      }
-    }
-
     const bgColor = theme === "dark" ? "#0b1630" : "#ffffff";
     const textColor = theme === "dark" ? "#ffffff" : "#0f172a";
 
     try {
-      await page.goto(cleanUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.goto(embedUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
 
       const cssContent = `
         @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
@@ -553,64 +681,100 @@ async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "l
 
         html,
         body,
-        .tgme_page,
-        .tgme_background_wrap,
-        .tgme_container,
-        .tgme_channel_history,
-        .tgme_channel_history_wrap,
-        .tgme_widget_message_wrap {
-            background: ${bgColor} !important;
+        .tgme_widget_message_page {
+            background: transparent !important;
             background-image: none !important;
             color: ${textColor} !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: none !important;
+            overflow: hidden !important;
+            box-sizing: border-box !important;
+        }
+
+        .tgme_widget_message_page > :not(.tgme_widget_message_wrap) {
+            display: none !important;
+        }
+
+        .tgme_widget_message_wrap > :not(.tgme_widget_message) {
+            display: none !important;
         }
 
         body,
-        .tgme_page,
-        .tgme_channel_info_header_title,
-        .tgme_widget_message_author,
-        .tgme_widget_message_link,
+        body *,
+        .tgme_widget_message,
         .tgme_widget_message_text,
-        .tgme_widget_message_wrap,
-        .tgme_widget_message_wrap * {
+        .tgme_widget_message_author,
+        .tgme_widget_message_meta {
             font-family: 'Pretendard', 'Noto Sans KR', sans-serif !important;
-            font-weight: 300 !important;
             letter-spacing: -0.3px !important;
-            line-height: 1.6 !important;
+        }
+
+        .tgme_widget_message_wrap {
+            padding: 12px !important;
+            margin: 0 !important;
+            max-width: 100% !important;
+            width: 100% !important;
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: none !important;
+            background: transparent !important;
+            box-sizing: border-box !important;
+            display: block !important;
+        }
+
+        /* 텔레그램 카드 자체의 스타일링을 콤팩트하고 고급스럽게 정의 */
+        .tgme_widget_message {
+            max-width: 540px !important;
+            width: 100% !important;
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: none !important;
+            margin: 0 auto !important;
+            box-sizing: border-box !important;
+            background: ${bgColor} !important;
+            border-radius: 12px !important;
+            border: ${theme === 'dark' ? "1px solid #1e293b" : "1px solid #e2e8f0"} !important;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, ${theme === 'dark' ? '0.3' : '0.06'}) !important;
+        }
+
+        .tgme_widget_message_bubble {
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: none !important;
+        }
+
+        .tgme_widget_message_inline_button_wrap,
+        .tgme_widget_message_inline_button,
+        .tgme_widget_login,
+        .tgme_widget_message_popup {
+            display: none !important;
+        }
+
+        /* 가독성을 높이기 위한 다크/라이트 텍스트 및 요소 색상 최적화 */
+        .tgme_widget_message_text {
+            color: ${theme === 'dark' ? '#f8fafc' : '#0f172a'} !important;
+        }
+        .tgme_widget_message_author, 
+        .tgme_widget_message_author * {
+            color: ${theme === 'dark' ? '#38bdf8' : '#0284c7'} !important;
+            font-weight: 600 !important;
+        }
+        .tgme_widget_message_meta,
+        .tgme_widget_message_meta * {
+            color: ${theme === 'dark' ? '#94a3b8' : '#64748b'} !important;
         }
       `;
 
       await page.addStyleTag({ content: cssContent });
 
-      const urlParts = cleanUrl.split("/");
-      const postIdentifier = urlParts.slice(-2).join("/"); // e.g., "banjang9/3895"
-      const selector = `[data-post="${postIdentifier}"]`;
+      const selector = `.tgme_widget_message`;
 
       await page.waitForSelector(selector, { timeout: 15000 });
-
-      // Attempt to target the inner .tgme_widget_message card to crop out wide margins
-      let element = page.locator(selector).locator(".tgme_widget_message").first();
-      try {
-        if (!(await element.isVisible({ timeout: 2000 }))) {
-          element = page.locator(selector);
-        }
-      } catch (e) {
-        element = page.locator(selector);
-      }
-
-      await element.evaluate((el, { bgColor, theme }) => {
-        // @ts-ignore
-        el.style.background = bgColor;
-        // @ts-ignore
-        el.style.backgroundImage = "none";
-        // @ts-ignore
-        el.style.borderRadius = "16px";
-        // @ts-ignore
-        el.style.padding = "24px";
-        // @ts-ignore
-        el.style.border = theme === 'dark' ? "1px solid #1f2937" : "1px solid #e4e4e7";
-        // @ts-ignore
-        el.style.boxShadow = "0 10px 30px rgba(0, 0, 0, " + (theme === 'dark' ? '0.3' : '0.05') + ")";
-      }, { bgColor, theme });
 
       let fontsReady = false;
       try {
@@ -632,36 +796,32 @@ async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "l
 
       await page.waitForTimeout(fontsReady ? 1000 : 3000);
 
-      const boundingBox = await element.boundingBox();
-      const elementHeight = (!boundingBox || boundingBox.height === 0) ? 2000 : Math.ceil(boundingBox.height);
+      const cardLocator = page.locator(".tgme_widget_message").first();
+      await cardLocator.waitFor({ state: "visible", timeout: 15000 });
 
+      // 뷰포트 너비를 564px로 잡고 카드가 안정적으로 로딩될 때까지 짧게 대기합니다.
       await page.setViewportSize({
-        width: 1280,
-        height: elementHeight + 300,
+        width: 564,
+        height: 1200,
       });
 
-      await element.evaluate((el) => {
-        const safetyMargin = 8;
-        const header = document.querySelector(".tgme_header");
-        const headerHeight = header ? header.getBoundingClientRect().height : 0;
-        const elementTop = el.getBoundingClientRect().top + window.scrollY;
-        const targetTop = Math.max(0, elementTop - headerHeight - safetyMargin);
+      await page.waitForTimeout(1000);
 
-        window.scrollTo({
-          top: targetTop,
-          behavior: "auto",
-        });
+      // 텔레그램 카드 메시지 엘리먼트 자체를 완벽하고 정밀하게 크롭하여 캡처합니다.
+      // 이렇게 하면 상하좌우 그 어떤 불필요한 공백이나 오차도 근본적으로 존재하지 않고 포스트만 정확하게 잘려나옵니다.
+      const screenshotBuffer = await cardLocator.screenshot({
+        type: "png",
+        omitBackground: true,
       });
 
-      await page.waitForTimeout(1500);
-      const screenshotBuffer = await element.screenshot({ type: "png" });
       return screenshotBuffer;
     } finally {
       await browser.close();
     }
   } catch (error) {
     console.warn("[captureTelegramPost] Playwright failed, falling back to Microlink:", error);
-    return await captureViaMicrolink(cleanUrl, ".tgme_widget_message", theme);
+    // 폴백 시에도 여백이 전혀 없는 완벽한 크롭을 위해 .tgme_widget_message 카드 자체를 크롭 영역으로 넘깁니다.
+    return await captureViaMicrolink(embedUrl, ".tgme_widget_message", theme);
   }
 }
 
@@ -751,7 +911,7 @@ async function captureYoutubeThumbnail(
   }
 
   try {
-    const browser = await launchBrowser(["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]);
+    const browser = await launchBrowser();
 
     const context = await browser.newContext({
       viewport: { width: 1000, height: 1000 },

@@ -379,7 +379,7 @@ export default function App() {
                         ? "https://www.youtube.com/post/Ugkx..."
                         : platform === "youtube_thumb"
                         ? "https://www.youtube.com/watch?v=dtp6b76pMak"
-                        : "https://t.me/s/channel/123 (또는 t.me/channel/123)"
+                        : "https://telegram.me/s/channel/123 (또는 telegram.me/channel/123)"
                     }
                     className="w-full bg-slate-50 border border-slate-200 text-slate-900 placeholder-slate-400 rounded-xl py-3 pl-4 pr-10 text-sm focus:outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-500/15 transition-all font-mono"
                     required
@@ -613,11 +613,11 @@ export default function App() {
                     id="gradient-backdrop-canvas"
                   >
                     {/* Rounded image card reflecting final asset */}
-                    <div className="relative group rounded-xl shadow-2xl border border-slate-200 bg-white select-all overflow-hidden flex items-center justify-center">
+                    <div className="relative group rounded-xl select-all overflow-hidden flex items-center justify-center">
                       <img
                         src={activeScreenshot.imageUrl}
                         alt="SNS Screenshot asset"
-                        className="max-h-[280px] sm:max-h-[340px] lg:max-h-[380px] w-auto h-auto block select-all cursor-zoom-in object-contain"
+                        className="max-h-[280px] sm:max-h-[340px] lg:max-h-[380px] w-auto h-auto block select-all cursor-zoom-in object-contain rounded-xl shadow-2xl border border-slate-200"
                         referrerPolicy="no-referrer"
                       />
                     </div>
