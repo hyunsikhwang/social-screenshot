@@ -2,17 +2,71 @@ import path from "path";
 import fs from "fs";
 import { execSync } from "child_process";
 
-// Set Playwright browser directory to a project-specific shared folder if it exists.
-// This resolves the permissions and executable path issue for sandbox runners (e.g. on mobile/shared preview).
-const localBrowsersPath = path.join(process.cwd(), ".playwright-browsers");
-if (fs.existsSync(localBrowsersPath)) {
-  process.env.PLAYWRIGHT_BROWSERS_PATH = localBrowsersPath;
+// Resolve and configure the path for Playwright browsers.
+const projectRoot = process.cwd();
+const builtBrowsersPath = path.join(projectRoot, "dist", ".playwright-browsers");
+const fallbackBrowsersPath = "/tmp/.playwright-browsers";
+
+let browsersPath = fallbackBrowsersPath;
+
+if (
+  fs.existsSync(builtBrowsersPath) &&
+  (fs.existsSync(path.join(builtBrowsersPath, "chromium-1228")) ||
+   fs.existsSync(path.join(builtBrowsersPath, "chromium_headless_shell-1228")))
+) {
+  browsersPath = builtBrowsersPath;
+  console.log(`[Playwright Config] Using built-in browser cache in dist: ${browsersPath}`);
+} else {
+  browsersPath = fallbackBrowsersPath;
+  console.log(`[Playwright Config] Built-in browser cache not found or incomplete. Using writable tmp path: ${browsersPath}`);
+  
+  // Ensure browsers are prepopulated in the writable /tmp directory
+  try {
+    fs.mkdirSync(browsersPath, { recursive: true });
+    
+    // Check if we already have chromium or chromium_headless_shell in our writable path
+    const hasChromium = fs.existsSync(path.join(browsersPath, "chromium-1228")) || 
+                       fs.existsSync(path.join(browsersPath, "chromium_headless_shell-1228"));
+                       
+    if (!hasChromium) {
+      console.log("[Playwright Config] Writable browser cache is empty. Searching for pre-installed global cache...");
+      const homeDir = process.env.HOME || "/root";
+      const globalCachePath1 = path.join(homeDir, ".cache", "ms-playwright");
+      const globalCachePath2 = "/home/node/.cache/ms-playwright";
+      
+      let sourcePath = "";
+      if (fs.existsSync(globalCachePath1) && (fs.existsSync(path.join(globalCachePath1, "chromium-1228")) || fs.existsSync(path.join(globalCachePath1, "chromium_headless_shell-1228")))) {
+        sourcePath = globalCachePath1;
+      } else if (fs.existsSync(globalCachePath2) && (fs.existsSync(path.join(globalCachePath2, "chromium-1228")) || fs.existsSync(path.join(globalCachePath2, "chromium_headless_shell-1228")))) {
+        sourcePath = globalCachePath2;
+      }
+      
+      if (sourcePath) {
+        console.log(`[Playwright Config] Pre-installed global cache found at: ${sourcePath}. Copying to writable cache...`);
+        try {
+          // Use cp command for extremely fast recursive copy
+          execSync(`cp -rp ${sourcePath}/* ${browsersPath}/`, { stdio: "inherit" });
+          console.log("[Playwright Config] Fast copy completed successfully!");
+        } catch (copyErr) {
+          console.warn("[Playwright Config] Failed to copy pre-installed cache:", copyErr);
+        }
+      } else {
+        console.log("[Playwright Config] No pre-installed global cache found. Will download dynamically on first launch.");
+      }
+    } else {
+      console.log("[Playwright Config] Writable browser cache is already populated.");
+    }
+  } catch (err) {
+    console.error("[Playwright Config] Error during initialization of writable browser cache:", err);
+  }
 }
+
+process.env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
+console.log(`[Playwright Config] Active PLAYWRIGHT_BROWSERS_PATH: ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
 
 import express from "express";
 import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
-import { chromium } from "playwright-core";
 
 // Safely resolve filename and dirname without TDZ or ESM/CJS conflicts
 let resolvedFilename = "";
@@ -31,6 +85,7 @@ const __dirname = resolvedDirname;
 
 // Helper to launch Chromium and dynamically install it if missing
 async function launchBrowser(args: string[] = []) {
+  const { chromium } = await import("playwright-core");
   const baseArgs = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"];
   const finalArgs = args.length > 0 ? args : baseArgs;
 
@@ -59,17 +114,42 @@ async function launchBrowser(args: string[] = []) {
     ) {
       console.log("Playwright browser executable is missing. Attempting dynamic installation of chromium...");
       try {
-        execSync("npx playwright-core install chromium", { stdio: "inherit" });
+        const envConfig = { ...process.env, HOME: "/tmp", PLAYWRIGHT_BROWSERS_PATH: browsersPath };
+        execSync("node node_modules/playwright-core/cli.js install chromium", { stdio: "inherit", env: envConfig });
         console.log("Playwright chromium installed successfully. Retrying browser launch...");
         return await chromium.launch({
           headless: true,
-          args,
+          args: optimizedArgs,
         });
       } catch (installError) {
         console.error("Failed to dynamically install Playwright chromium:", installError);
         throw error;
       }
     }
+
+    // Check if launch error is due to missing shared system libraries
+    if (
+      errorMsg.includes("shared library") || 
+      errorMsg.includes("shared libraries") || 
+      errorMsg.includes("cannot open shared object file") ||
+      errorMsg.includes("Target page, context or browser has been closed") ||
+      errorMsg.includes("error while loading")
+    ) {
+      console.log("[Playwright Config] Missing shared libraries or browser launch failed. Attempting dynamic system dependencies installation...");
+      try {
+        // Run apt-get update & install-deps to auto-resolve missing OS libraries dynamically
+        execSync("apt-get update && node node_modules/playwright-core/cli.js install-deps chromium", { stdio: "inherit" });
+        console.log("[Playwright Config] Browser system dependencies installed. Retrying launch...");
+        return await chromium.launch({
+          headless: true,
+          args: optimizedArgs,
+        });
+      } catch (depsError) {
+        console.error("[Playwright Config] Failed to dynamically install system dependencies:", depsError);
+        throw error;
+      }
+    }
+
     throw error;
   }
 }
@@ -174,18 +254,15 @@ async function captureViaMicrolink(targetUrl: string, elementSelector: string, t
   });
 
   if (elementSelector) {
-    params.append("screenshot.element", elementSelector);
     params.append("element", elementSelector);
   }
 
   // Optimize waiting conditions and viewports depending on platform url
   if (targetUrl.includes("x.com") || targetUrl.includes("twitter.com")) {
     params.append("screenshot.waitFor", "article");
-    params.append("waitFor", "article");
     params.append("screenshot.delay", "3000");
   } else if (targetUrl.includes("t.me") || targetUrl.includes("telegram.me")) {
     params.append("screenshot.waitFor", ".tgme_widget_message");
-    params.append("waitFor", ".tgme_widget_message");
     params.append("screenshot.delay", "3000");
     // Force mobile-sized viewport in Microlink fallback for Telegram to get perfect crops without margins
     params.append("viewport.width", "564");
@@ -274,6 +351,58 @@ async function captureViaMicrolink(targetUrl: string, elementSelector: string, t
     `.replace(/\s+/g, " ").trim();
 
     params.append("styles", microlinkCss);
+  } else if ((targetUrl.includes("youtube.com") || targetUrl.includes("youtu.be")) && !targetUrl.includes("render-youtube-thumb")) {
+    // Wait for ytd-backstage-post-renderer to fully load in Microlink's browser
+    params.append("screenshot.waitFor", "ytd-backstage-post-renderer");
+    params.append("screenshot.delay", "5000"); // Allow extra time for client-side API requests and custom font loading
+    
+    // Desktop size viewport
+    params.append("viewport.width", "1280");
+    params.append("viewport.height", "1400");
+    
+    // Inject custom CSS to isolate the post-card and apply fonts
+    const youtubeCss = `
+      @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+      @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
+
+      ytd-masthead, #masthead-container, #guide, ytd-mini-guide-renderer, #comments, #sections, #sidebar, #meta, ytd-backstage-post-thread-renderer > :not(ytd-backstage-post-renderer), #footer {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+      }
+      ytd-app #page-manager.ytd-app {
+        margin-top: 0 !important;
+        margin-left: 0 !important;
+      }
+      body, html {
+        background: transparent !important;
+        background-color: transparent !important;
+        font-family: 'Pretendard', 'Noto Sans KR', sans-serif !important;
+      }
+      * {
+        font-family: 'Pretendard', 'Noto Sans KR', sans-serif !important;
+      }
+      ytd-backstage-post-renderer {
+        background-color: ${theme === "dark" ? "#181818" : "#ffffff"} !important;
+        border-radius: 24px !important;
+        border: 1px solid ${theme === "dark" ? "#333333" : "#e2e8f0"} !important;
+        padding: 24px !important;
+        margin: 20px auto !important;
+        display: block !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, ${theme === "dark" ? "0.3" : "0.05"}) !important;
+      }
+      ytd-backstage-post-renderer, ytd-backstage-post-renderer * {
+        color: ${theme === "dark" ? "#ffffff" : "#0f172a"} !important;
+        --yt-spec-text-primary: ${theme === "dark" ? "#ffffff" : "#0f172a"} !important;
+        --yt-spec-text-secondary: ${theme === "dark" ? "#dddddd" : "#475569"} !important;
+      }
+      ytd-backstage-post-renderer a, ytd-backstage-post-renderer span[class*="hashtag"] {
+        color: #3ea6ff !important;
+        text-decoration: none !important;
+      }
+    `.replace(/\s+/g, " ").trim();
+    
+    params.append("styles", youtubeCss);
   } else if (targetUrl.includes("render-youtube-thumb")) {
     params.append("screenshot.waitFor", ".card");
     params.append("screenshot.delay", "2000");
@@ -282,9 +411,49 @@ async function captureViaMicrolink(targetUrl: string, elementSelector: string, t
   const apiUrl = `https://api.microlink.io/?${params.toString()}`;
   console.log(`[Microlink Fallback] API Request URL: ${apiUrl}`);
 
-  const response = await fetch(apiUrl);
+  let response = await fetch(apiUrl);
+  
+  // If the initial request fails (e.g., selector not found because of a login wall or consent screen)
+  if (!response.ok && (params.has("screenshot.waitFor") || params.has("element") || params.has("styles"))) {
+    console.warn(`[Microlink Fallback] Initial request failed with HTTP ${response.status}. Retrying without selector/styles...`);
+    const retryParams = new URLSearchParams(params);
+    retryParams.delete("screenshot.waitFor");
+    retryParams.delete("element");
+    retryParams.delete("styles");
+    
+    const retryApiUrl = `https://api.microlink.io/?${retryParams.toString()}`;
+    const retryResponse = await fetch(retryApiUrl);
+    if (retryResponse.ok) {
+      response = retryResponse;
+    }
+  }
+
   if (!response.ok) {
-    throw new Error(`Microlink API failed: HTTP ${response.status}`);
+    let errorBody = "";
+    try {
+      errorBody = await response.text();
+    } catch (e) {
+      errorBody = "Could not read error body";
+    }
+    console.error(`[Microlink Fallback] Failed with HTTP ${response.status}. Body: ${errorBody}`);
+    
+    let errorMessage = `Microlink API failed: HTTP ${response.status}`;
+    try {
+      const parsedError = JSON.parse(errorBody);
+      if (parsedError.message) {
+        errorMessage = `${parsedError.message} (HTTP ${response.status})`;
+      } else if (parsedError.data && typeof parsedError.data === "object") {
+        const details = Object.entries(parsedError.data)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join(", ");
+        errorMessage = `${parsedError.code || "Error"}: ${details} (HTTP ${response.status})`;
+      } else if (parsedError.code) {
+        errorMessage = `${parsedError.code} (HTTP ${response.status})`;
+      }
+    } catch (e) {
+      // Not JSON
+    }
+    throw new Error(errorMessage);
   }
 
   const json: any = await response.json();
@@ -316,6 +485,7 @@ async function captureXPost(postUrl: string, theme: "light" | "dark" = "light"):
       deviceScaleFactor: 2,
       colorScheme: theme,
       locale: "ko-KR",
+      bypassCSP: true,
     });
 
     // Bypass Content Security Policy (CSP) for document requests on x.com
@@ -369,16 +539,14 @@ async function captureXPost(postUrl: string, theme: "light" | "dark" = "light"):
       }
 
       // Inject fonts & styles
-      const cssContent = `
-        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap');
-        html, body {
-          background: ${pageColor} !important;
-        }
-        article, article * {
-          font-family: 'Pretendard', 'Noto Sans KR', 'Noto Sans SC', 'Noto Sans JP', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif !important;
-        }
-      `;
+      const cssContent = `@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap');
+html, body {
+  background: ${pageColor} !important;
+}
+article, article * {
+  font-family: 'Pretendard', 'Noto Sans KR', 'Noto Sans SC', 'Noto Sans JP', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif !important;
+}`.trim();
 
       try {
         await page.addStyleTag({ content: cssContent });
@@ -473,7 +641,22 @@ async function captureXPost(postUrl: string, theme: "light" | "dark" = "light"):
   }
 }
 
-async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "light"): Promise<Buffer> {
+async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "light", hostUrl?: string): Promise<Buffer> {
+  // Normalize mobile youtube domain to standard desktop youtube domain
+  let targetUrl = postUrl.trim();
+  if (!/^https?:\/\//i.test(targetUrl)) {
+    targetUrl = `https://${targetUrl}`;
+  }
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.hostname.toLowerCase() === "m.youtube.com") {
+      parsed.hostname = "www.youtube.com";
+      targetUrl = parsed.toString();
+    }
+  } catch (e) {
+    // Ignore
+  }
+
   try {
     const browser = await launchBrowser();
 
@@ -483,24 +666,16 @@ async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "li
       colorScheme: theme,
       userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
       locale: "ko-KR",
+      bypassCSP: true,
     });
 
-    const page = await context.newPage();
+    // Bypass YouTube / Google Consent Screen by injecting consent cookies
+    await context.addCookies([
+      { name: "SOCS", value: "CAI", domain: ".youtube.com", path: "/" },
+      { name: "CONSENT", value: "YES+", domain: ".youtube.com", path: "/" }
+    ]);
 
-    // Normalize mobile youtube domain to standard desktop youtube domain
-    let targetUrl = postUrl.trim();
-    if (!/^https?:\/\//i.test(targetUrl)) {
-      targetUrl = `https://${targetUrl}`;
-    }
-    try {
-      const parsed = new URL(targetUrl);
-      if (parsed.hostname.toLowerCase() === "m.youtube.com") {
-        parsed.hostname = "www.youtube.com";
-        targetUrl = parsed.toString();
-      }
-    } catch (e) {
-      // Ignore
-    }
+    const page = await context.newPage();
 
     try {
       try {
@@ -509,32 +684,46 @@ async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "li
         // Ignore navigation timeout if some parts loaded
       }
 
-      const cssContent = `
-        ytd-masthead, #masthead-container { display: none !important; visibility: hidden !important; height: 0 !important; }
-        ytd-app #page-manager.ytd-app { margin-top: 0 !important; }
-        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap');
-        * { font-family: 'Pretendard', 'Noto Sans KR', sans-serif !important; }
-        
-        ytd-backstage-post-renderer {
-          background-color: ${theme === "dark" ? "#181818" : "#ffffff"} !important;
-          border-radius: 24px !important;
-          border: 1px solid ${theme === "dark" ? "#333333" : "#e2e8f0"} !important;
-          padding: 24px !important;
-          margin: 20px auto !important;
-          display: block !important;
-          box-shadow: 0 4px 20px rgba(0, 0, 0, ${theme === "dark" ? "0.3" : "0.05"}) !important;
-        }
-        ytd-backstage-post-renderer, ytd-backstage-post-renderer * {
-          color: ${theme === "dark" ? "#ffffff" : "#0f172a"} !important;
-          --yt-spec-text-primary: ${theme === "dark" ? "#ffffff" : "#0f172a"} !important;
-          --yt-spec-text-secondary: ${theme === "dark" ? "#dddddd" : "#475569"} !important;
-        }
-        ytd-backstage-post-renderer a, ytd-backstage-post-renderer span[class*="hashtag"] {
-          color: #3ea6ff !important;
-          text-decoration: none !important;
-        }
-      `;
+      const cssContent = `@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap');
+
+ytd-masthead, #masthead-container { display: none !important; visibility: hidden !important; height: 0 !important; }
+ytd-app #page-manager.ytd-app { margin-top: 0 !important; }
+* { font-family: 'Pretendard', 'Noto Sans KR', sans-serif !important; }
+
+ytd-backstage-post-renderer {
+  background-color: ${theme === "dark" ? "#181818" : "#ffffff"} !important;
+  border-radius: 24px !important;
+  border: 1px solid ${theme === "dark" ? "#333333" : "#e2e8f0"} !important;
+  padding: 24px 24px 48px 24px !important;
+  margin: 20px auto !important;
+  display: block !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, ${theme === "dark" ? "0.3" : "0.05"}) !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
+  height: auto !important;
+  min-height: min-content !important;
+}
+ytd-backstage-post-renderer, ytd-backstage-post-renderer * {
+  color: ${theme === "dark" ? "#ffffff" : "#0f172a"} !important;
+  --yt-spec-text-primary: ${theme === "dark" ? "#ffffff" : "#0f172a"} !important;
+  --yt-spec-text-secondary: ${theme === "dark" ? "#dddddd" : "#475569"} !important;
+  text-align: left !important;
+}
+ytd-backstage-post-renderer a, ytd-backstage-post-renderer span[class*="hashtag"] {
+  color: #3ea6ff !important;
+  text-decoration: none !important;
+}
+
+/* Force-expand text containers and formatters to prevent truncation */
+#content, #content-text, #text, .content, .text, ytd-text-expander, yt-formatted-string {
+  max-height: none !important;
+  -webkit-line-clamp: none !important;
+  line-clamp: none !important;
+  display: block !important;
+  overflow: visible !important;
+  text-align: left !important;
+}`.trim();
 
       await page.addStyleTag({ content: cssContent });
 
@@ -560,14 +749,126 @@ async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "li
 
       // Expand "Read more" / "자세히 알아보기" / "더 보기" button
       try {
-        // YouTube's "Read more" is typically a span/button with ID "more" or class "more-button" or "expand"
+        // Wait 2500ms to let Polymer custom elements fully upgrade and register JS event listeners
+        await page.waitForTimeout(2500);
+
+        // 1. Run a native shadow-piercing clicker and styles injector directly in the browser context.
+        // This is extremely reliable as it handles Polymer shadow roots, forces full text styles, and clicks buttons.
+        await page.evaluate(() => {
+          function forceExpandAndStyleRecursive(root: any) {
+            if (!root) return;
+
+            // Force-expand any text-expanders directly
+            const expanders = root.querySelectorAll("ytd-text-expander, [class*='expander']");
+            expanders.forEach((el: any) => {
+              try {
+                el.removeAttribute("collapsed");
+                el.removeAttribute("is-collapsed");
+                el.setAttribute("expanded", "");
+                el.setAttribute("is-expanded", "");
+                el.expanded = true;
+                el.isExpanded = true;
+
+                // Inject overriding styles inside the expander's shadow root
+                if (el.shadowRoot) {
+                  const styleId = "force-expand-shadow-style";
+                  if (!el.shadowRoot.getElementById(styleId)) {
+                    const style = document.createElement("style");
+                    style.id = styleId;
+                    style.textContent = `
+                      #content, #content-text, #text, .content, .text, ytd-text-expander, yt-formatted-string {
+                        max-height: none !important;
+                        -webkit-line-clamp: none !important;
+                        line-clamp: none !important;
+                        display: block !important;
+                        overflow: visible !important;
+                        text-align: left !important;
+                      }
+                      #more, #expand, .more-button {
+                        display: none !important;
+                      }
+                    `;
+                    el.shadowRoot.appendChild(style);
+                  }
+                }
+
+                const button = el.querySelector("#more, #expand, button, paper-button");
+                if (button) {
+                  (button as HTMLElement).click();
+                }
+              } catch (e) {}
+            });
+
+            const targets = root.querySelectorAll("#more, .more-button, #expand, [id='more'], [id='expand']");
+            targets.forEach((el: any) => {
+              if (el) {
+                try {
+                  (el as HTMLElement).click();
+                  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                } catch (e) {}
+              }
+            });
+
+            const textRegex = /자세히\s*알아보기|자세히\s*보기|더\s*보기|더보기|Read\s*more|Show\s*more/i;
+            const allEls = root.querySelectorAll("span, a, button, tp-yt-paper-button, [role='button']");
+            allEls.forEach((el: any) => {
+              if (el && el.textContent && textRegex.test(el.textContent)) {
+                try {
+                  (el as HTMLElement).click();
+                  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                } catch (e) {}
+              }
+            });
+
+            // Also search and expand yt-formatted-string
+            const formatted = root.querySelectorAll("yt-formatted-string");
+            formatted.forEach((el: any) => {
+              try {
+                el.setAttribute("is-expanded", "");
+                el.setAttribute("expanded", "");
+                (el as any).isExpanded = true;
+                (el as any).expanded = true;
+
+                if (el.shadowRoot) {
+                  const styleId = "force-expand-shadow-style";
+                  if (!el.shadowRoot.getElementById(styleId)) {
+                    const style = document.createElement("style");
+                    style.id = styleId;
+                    style.textContent = `
+                      #text, #content, .text {
+                        max-height: none !important;
+                        -webkit-line-clamp: none !important;
+                        line-clamp: none !important;
+                        display: inline !important;
+                        overflow: visible !important;
+                        text-align: left !important;
+                      }
+                    `;
+                    el.shadowRoot.appendChild(style);
+                  }
+                }
+              } catch (e) {}
+            });
+
+            const children = root.querySelectorAll("*");
+            children.forEach((child: any) => {
+              if (child.shadowRoot) {
+                forceExpandAndStyleRecursive(child.shadowRoot);
+              }
+            });
+          }
+          forceExpandAndStyleRecursive(document);
+        });
+
+        // 2. Playwright-level specific selectors with force clicks on leaf nodes
         const specificSelectors = [
-          "#more",
-          ".more-button",
-          "#expand",
-          "button[id='more']",
-          "span[id='more']",
-          "a[id='more']"
+          "span#more",
+          "a#more",
+          "button#more",
+          "tp-yt-paper-button#more",
+          "span.more-button",
+          "a.more-button",
+          "button.more-button"
         ];
         
         for (const sel of specificSelectors) {
@@ -576,17 +877,15 @@ async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "li
           for (let idx = 0; idx < count; idx++) {
             const item = el.nth(idx);
             try {
-              if (await item.isVisible({ timeout: 500 })) {
-                await item.click({ timeout: 2000 });
-                await page.waitForTimeout(500);
-              }
+              await item.click({ timeout: 1000, force: true });
+              await page.waitForTimeout(150);
             } catch (e) {
               // Ignore
             }
           }
         }
 
-        // Also search by text content (e.g. "자세히 알아보기", "자세히 보기", "더 보기", "더보기", etc.)
+        // Also search and click by text content on small leaf-like tags only (span, a, button, tp-yt-paper-button)
         const expandTexts = [
           /자세히\s*알아보기/,
           /자세히\s*보기/,
@@ -597,15 +896,13 @@ async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "li
         ];
 
         for (const rx of expandTexts) {
-          const el = postLocator.locator('*').filter({ hasText: rx });
+          const el = postLocator.locator('span, a, button, tp-yt-paper-button, [role="button"]').filter({ hasText: rx });
           const count = await el.count();
           for (let idx = 0; idx < count; idx++) {
             const item = el.nth(idx);
             try {
-              if (await item.isVisible({ timeout: 500 })) {
-                await item.click({ timeout: 2000 });
-                await page.waitForTimeout(500);
-              }
+              await item.click({ timeout: 1000, force: true });
+              await page.waitForTimeout(150);
             } catch (e) {
               // Ignore
             }
@@ -616,7 +913,37 @@ async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "li
       }
 
       await postLocator.scrollIntoViewIfNeeded({ timeout: 3000 });
-      await page.waitForTimeout(800);
+      await page.waitForTimeout(500);
+
+      // Adjust viewport size dynamically based on the post's expanded bounding box
+      const box = await postLocator.boundingBox();
+      if (box && box.height > 0) {
+        const desiredH = Math.floor(box.height) + 300;
+        const adjustedH = Math.max(1200, Math.min(desiredH, 8000));
+        await page.setViewportSize({ width: 1920, height: adjustedH });
+        await page.waitForTimeout(400);
+        await postLocator.scrollIntoViewIfNeeded({ timeout: 3000 });
+      }
+
+      // Wait for height to stabilize to prevent cut-off issues
+      let stable = 0;
+      let prevH = -1;
+      for (let i = 0; i < 20; i++) {
+        const curBox = await postLocator.boundingBox();
+        if (curBox && curBox.height > 100) {
+          const currH = Math.floor(curBox.height);
+          if (Math.abs(currH - prevH) <= 1) {
+            stable++;
+          } else {
+            stable = 0;
+          }
+          prevH = currH;
+          if (stable >= 3) break;
+        }
+        await page.waitForTimeout(150);
+      }
+
+      await page.waitForTimeout(400);
 
       const screenshotBuffer = await postLocator.screenshot({
         type: "png",
@@ -626,10 +953,308 @@ async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "li
     } finally {
       await browser.close();
     }
-  } catch (error) {
-    console.warn("[captureYoutubePost] Playwright failed, falling back to Microlink:", error);
-    return await captureViaMicrolink(postUrl, "ytd-backstage-post-renderer, ytd-post-renderer, #content", theme);
+  } catch (error: any) {
+    console.warn("[captureYoutubePost] Playwright failed, trying metadata extraction & dynamic render fallback:", error);
+    try {
+      const response = await fetch(targetUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch YouTube post page: HTTP ${response.status}`);
+      }
+      const html = await response.text();
+
+      // Extract OG tags as initial values
+      let ogTitle = html.match(/<meta[^>]*property=["\x27]og:title["\x27][^>]*content=["\x27]([^"\x27]*)["\x27]/i)?.[1] ||
+                    html.match(/<meta[^>]*content=["\x27]([^"\x27]*)["\x27][^>]*property=["\x27]og:title["\x27]/i)?.[1] ||
+                    "YouTube Creator";
+
+      let ogDesc = html.match(/<meta[^>]*property=["\x27]og:description["\x27][^>]*content=["\x27]([^"\x27]*)["\x27]/i)?.[1] ||
+                   html.match(/<meta[^>]*content=["\x27]([^"\x27]*)["\x27][^>]*property=["\x27]og:description["\x27]/i)?.[1] ||
+                   "";
+
+      let ogImage = html.match(/<meta[^>]*property=["\x27]og:image["\x27][^>]*content=["\x27]([^"\x27]*)["\x27]/i)?.[1] ||
+                    html.match(/<meta[^>]*content=["\x27]([^"\x27]*)["\x27][^>]*property=["\x27]og:image["\x27]/i)?.[1] ||
+                    "";
+
+      // HTML Unescape helper
+      const unescapeHtml = (str: string) => {
+        return str
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&quot;/g, "\"")
+          .replace(/&#39;/g, "'")
+          .replace(/&#039;/g, "'");
+      };
+
+      ogDesc = unescapeHtml(ogDesc);
+
+      // Clean up ogTitle
+      let channelName = ogTitle;
+      const cleanPatterns = [
+        /\s*さんからの投稿\s*/i,
+        /\s*님의\s+포스트\s*/i,
+        /Post\s+from\s+/i,
+        /\s*-\s*YouTube/i
+      ];
+      for (const pattern of cleanPatterns) {
+        channelName = channelName.replace(pattern, "");
+      }
+      channelName = channelName.trim();
+
+      const ogImageFromMeta = ogImage;
+      let postImages: string[] = [];
+
+      // Attempt to extract rich, non-truncated content from ytInitialData
+      let publishedTime = "";
+      let voteCount = "";
+      let parsedSuccessfully = false;
+
+      const ytInitialDataMatch = html.match(/var\s+ytInitialData\s*=\s*({.+?});/);
+      if (ytInitialDataMatch) {
+        try {
+          const data = JSON.parse(ytInitialDataMatch[1]);
+          let post = null;
+          try {
+            const tabs = data?.contents?.twoColumnBrowseResultsRenderer?.tabs;
+            if (tabs) {
+              for (const tab of tabs) {
+                const contents = tab?.tabRenderer?.content?.sectionListRenderer?.contents;
+                if (contents) {
+                  for (const section of contents) {
+                    const items = section?.itemSectionRenderer?.contents;
+                    if (items) {
+                      for (const item of items) {
+                        if (item?.backstagePostThreadRenderer?.post?.backstagePostRenderer) {
+                          post = item.backstagePostThreadRenderer.post.backstagePostRenderer;
+                          break;
+                        }
+                      }
+                    }
+                    if (post) break;
+                  }
+                }
+                if (post) break;
+              }
+            }
+          } catch (err) {
+            console.warn("[ytInitialData] Error navigating tabs:", err);
+          }
+
+          if (post) {
+            if (post.authorText?.runs?.[0]?.text) {
+              channelName = post.authorText.runs[0].text;
+            }
+            if (post.publishedTimeText?.runs?.[0]?.text) {
+              publishedTime = post.publishedTimeText.runs[0].text;
+            }
+            if (post.authorThumbnail?.thumbnails?.length > 0) {
+              const thumbs = post.authorThumbnail.thumbnails;
+              const highest = thumbs[thumbs.length - 1];
+              let thumbUrl = highest.url;
+              if (thumbUrl.startsWith("//")) {
+                thumbUrl = "https:" + thumbUrl;
+              }
+              ogImage = thumbUrl;
+            }
+            if (post.voteCount?.simpleText) {
+              voteCount = post.voteCount.simpleText;
+            } else if (post.voteCount?.accessibility?.accessibilityData?.label) {
+              voteCount = post.voteCount.accessibility.accessibilityData.label;
+            }
+            if (post.contentText?.runs) {
+              let textContent = "";
+              for (const run of post.contentText.runs) {
+                if (run.text) {
+                  textContent += run.text;
+                }
+              }
+              if (textContent.trim()) {
+                ogDesc = textContent;
+                parsedSuccessfully = true;
+                console.log("[captureYoutubePost Fallback] Successfully parsed full YouTube post text from ytInitialData! Length:", ogDesc.length);
+              }
+            }
+
+            // Extract images from backstage post attachment
+            if (post.attachment) {
+              // 1. Single Image
+              const singleImage = post.attachment?.backstageImageRenderer?.image?.thumbnails;
+              if (singleImage && singleImage.length > 0) {
+                const imgUrl = singleImage[singleImage.length - 1].url;
+                postImages.push(imgUrl.startsWith("//") ? "https:" + imgUrl : imgUrl);
+              }
+              // 2. Multi-image
+              const multiImages = post.attachment?.postMultiImageRenderer?.images;
+              if (Array.isArray(multiImages)) {
+                for (const imgItem of multiImages) {
+                  const thumbs = imgItem?.backstageImageRenderer?.image?.thumbnails;
+                  if (thumbs && thumbs.length > 0) {
+                    const imgUrl = thumbs[thumbs.length - 1].url;
+                    postImages.push(imgUrl.startsWith("//") ? "https:" + imgUrl : imgUrl);
+                  }
+                }
+              }
+            }
+          }
+        } catch (jsonErr) {
+          console.warn("[captureYoutubePost Fallback] Failed to parse ytInitialData JSON:", jsonErr);
+        }
+      }
+
+      // Fallback: If no post images were extracted via JSON but ogImageFromMeta exists and is not equal to parsed channel avatar, use it.
+      if (postImages.length === 0 && ogImageFromMeta && ogImageFromMeta !== ogImage) {
+        postImages.push(ogImageFromMeta);
+      }
+
+      console.log(`[captureYoutubePost Fallback] Redirecting to Microlink with dynamic page rendering... Images found: ${postImages.length}`);
+      const finalHost = hostUrl || "https://ais-dev-errgpu747quwousyeut56p-220065767305.asia-northeast1.run.app";
+      const params = new URLSearchParams({
+        channelName,
+        desc: ogDesc,
+        avatar: ogImage,
+        theme,
+        publishedTime,
+        voteCount
+      });
+      if (postImages && postImages.length > 0) {
+        postImages.forEach(img => params.append("postImage", img));
+      }
+      const renderUrl = `${finalHost}/api/render-youtube-post?${params.toString()}`;
+      return await captureViaMicrolink(renderUrl, "#youtube-post-card", theme);
+    } catch (fallbackErr: any) {
+      console.error("[captureYoutubePost] Meta extraction fallback also failed:", fallbackErr);
+      throw new Error(`Playwright failed: ${error.message || error}. Fallback failed: ${fallbackErr.message || fallbackErr}`);
+    }
   }
+}
+
+async function generateYoutubeSvg(
+  channelName: string,
+  desc: string,
+  avatarUrl: string,
+  publishedTime: string,
+  voteCount: string,
+  theme: "light" | "dark"
+): Promise<Buffer> {
+  const isDark = theme === "dark";
+  const subTextColor = isDark ? "#aaaaaa" : "#606060";
+
+  let avatarBase64 = "";
+  if (avatarUrl) {
+    try {
+      const response = await fetch(avatarUrl);
+      if (response.ok) {
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const mime = response.headers.get("content-type") || "image/jpeg";
+        avatarBase64 = `data:${mime};base64,${buffer.toString("base64")}`;
+      }
+    } catch (err) {
+      console.warn("Failed to fetch avatar for SVG embedding:", err);
+    }
+  }
+
+  const linkify = (text: string) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    return text.replace(urlRegex, (url) => {
+      const escapedUrl = url
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+      return `<a href="${escapedUrl}" style="color: #3ea6ff; text-decoration: none;" target="_blank">${escapedUrl}</a>`;
+    });
+  };
+
+  // Safe estimate of content height taking newlines and wide characters into account
+  const lines = desc.split("\n");
+  let totalLineCount = 0;
+  for (const line of lines) {
+    let visualLength = 0;
+    for (let i = 0; i < line.length; i++) {
+      const charCode = line.charCodeAt(i);
+      // CJK/Hangul characters are wider (typically 1.75 - 2 times standard latin characters)
+      if (charCode > 127) {
+        visualLength += 1.75;
+      } else {
+        visualLength += 1.0;
+      }
+    }
+    // Available line width is 552px (600px - 48px padding).
+    // At 14px font-size, a standard latin line holds around 68 visual units.
+    const wrapCount = Math.max(1, Math.ceil(visualLength / 68));
+    totalLineCount += wrapCount;
+  }
+  // Add a small buffer line for safety
+  totalLineCount += 0.5;
+
+  const estimatedTextHeight = Math.max(3, totalLineCount) * 21;
+  // Non-text vertical base height is exactly 155px (top-bottom padding, avatar, header, margins, and footer)
+  const calculatedHeight = 155 + estimatedTextHeight;
+  const finalHeight = Math.max(260, Math.min(calculatedHeight, 1500));
+
+  const svgContent = `
+    <svg width="600" height="${finalHeight}" viewBox="0 0 600 ${finalHeight}" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <foreignObject width="600" height="${finalHeight}">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="
+          font-family: 'Pretendard', system-ui, -apple-system, sans-serif;
+          background-color: ${isDark ? "#1f1f1f" : "#ffffff"};
+          color: ${isDark ? "#f1f1f1" : "#0f0f0f"};
+          border: 1px solid ${isDark ? "#3f3f3f" : "#e5e5e5"};
+          border-radius: 16px;
+          padding: 24px;
+          box-sizing: border-box;
+          width: 100%;
+          height: 100%;
+        ">
+          <div style="display: flex; align-items: center; margin-bottom: 16px;">
+            ${avatarBase64 ? `
+              <img src="${avatarBase64}" style="width: 40px; height: 40px; border-radius: 50%; margin-right: 12px; object-fit: cover;" />
+            ` : `
+              <div style="width: 40px; height: 40px; border-radius: 50%; margin-right: 12px; background: #ef4444; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 16px;">
+                ${(channelName || "Y").charAt(0).toUpperCase()}
+              </div>
+            `}
+            <div style="display: flex; flex-direction: column;">
+              <div style="display: flex; align-items: baseline; gap: 6px;">
+                <span style="font-size: 14px; font-weight: 700; color: ${isDark ? "#f1f1f1" : "#0f0f0f"};">${escapeHtml(channelName)}</span>
+                ${publishedTime ? `
+                  <span style="font-size: 10px; color: ${subTextColor};">•</span>
+                  <span style="font-size: 12px; color: ${subTextColor};">${escapeHtml(publishedTime)}</span>
+                ` : ""}
+              </div>
+              <span style="font-size: 11px; color: ${subTextColor};">YouTube Community Post</span>
+            </div>
+          </div>
+          <div style="font-size: 14px; line-height: 1.5; color: ${isDark ? "#f1f1f1" : "#0f0f0f"}; white-space: pre-wrap; word-break: break-word; margin-bottom: 20px;">
+            ${linkify(escapeHtml(desc))}
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid ${isDark ? "#3f3f3f" : "#e5e5e5"}; padding-top: 14px; font-size: 12px;">
+            <div style="display: flex; align-items: center; gap: 16px;">
+              <div style="display: flex; align-items: center; gap: 6px; color: ${isDark ? "#f1f1f1" : "#0f0f0f"};">
+                <svg style="width: 16px; height: 16px;" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>
+                <span>${escapeHtml(voteCount || "0")}</span>
+              </div>
+              <div style="color: ${subTextColor}; display: flex; align-items: center;">
+                <svg style="width: 16px; height: 16px;" viewBox="0 0 24 24" fill="currentColor"><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>
+              </div>
+              <div style="color: ${subTextColor}; display: flex; align-items: center;">
+                <svg style="width: 16px; height: 16px;" viewBox="0 0 24 24" fill="currentColor"><path d="M14 9V5l7 7-7 7v-4.1c-5 0-8.5 1.6-11 5.1 1-5 4-10 11-11.1z"/></svg>
+              </div>
+            </div>
+            <span style="color: ${subTextColor};">youtube.com</span>
+          </div>
+        </div>
+      </foreignObject>
+    </svg>
+  `.trim();
+
+  return Buffer.from(svgContent, "utf-8");
 }
 
 async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "light"): Promise<Buffer> {
@@ -665,6 +1290,7 @@ async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "l
       viewport: { width: 564, height: 900 },
       deviceScaleFactor: 3,
       locale: "ko-KR",
+      bypassCSP: true,
     });
 
     const page = await context.newPage();
@@ -675,100 +1301,98 @@ async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "l
     try {
       await page.goto(embedUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
 
-      const cssContent = `
-        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
+      const cssContent = `@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
 
-        html,
-        body,
-        .tgme_widget_message_page {
-            background: transparent !important;
-            background-image: none !important;
-            color: ${textColor} !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            width: 100% !important;
-            max-width: 100% !important;
-            height: auto !important;
-            min-height: 0 !important;
-            max-height: none !important;
-            overflow: hidden !important;
-            box-sizing: border-box !important;
-        }
+html,
+body,
+.tgme_widget_message_page {
+    background: transparent !important;
+    background-image: none !important;
+    color: ${textColor} !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+}
 
-        .tgme_widget_message_page > :not(.tgme_widget_message_wrap) {
-            display: none !important;
-        }
+.tgme_widget_message_page > :not(.tgme_widget_message_wrap) {
+    display: none !important;
+}
 
-        .tgme_widget_message_wrap > :not(.tgme_widget_message) {
-            display: none !important;
-        }
+.tgme_widget_message_wrap > :not(.tgme_widget_message) {
+    display: none !important;
+}
 
-        body,
-        body *,
-        .tgme_widget_message,
-        .tgme_widget_message_text,
-        .tgme_widget_message_author,
-        .tgme_widget_message_meta {
-            font-family: 'Pretendard', 'Noto Sans KR', sans-serif !important;
-            letter-spacing: -0.3px !important;
-        }
+body,
+body *,
+.tgme_widget_message,
+.tgme_widget_message_text,
+.tgme_widget_message_author,
+.tgme_widget_message_meta {
+    font-family: 'Pretendard', 'Noto Sans KR', sans-serif !important;
+    letter-spacing: -0.3px !important;
+}
 
-        .tgme_widget_message_wrap {
-            padding: 12px !important;
-            margin: 0 !important;
-            max-width: 100% !important;
-            width: 100% !important;
-            height: auto !important;
-            min-height: 0 !important;
-            max-height: none !important;
-            background: transparent !important;
-            box-sizing: border-box !important;
-            display: block !important;
-        }
+.tgme_widget_message_wrap {
+    padding: 12px !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    background: transparent !important;
+    box-sizing: border-box !important;
+    display: block !important;
+}
 
-        /* 텔레그램 카드 자체의 스타일링을 콤팩트하고 고급스럽게 정의 */
-        .tgme_widget_message {
-            max-width: 540px !important;
-            width: 100% !important;
-            height: auto !important;
-            min-height: 0 !important;
-            max-height: none !important;
-            margin: 0 auto !important;
-            box-sizing: border-box !important;
-            background: ${bgColor} !important;
-            border-radius: 12px !important;
-            border: ${theme === 'dark' ? "1px solid #1e293b" : "1px solid #e2e8f0"} !important;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, ${theme === 'dark' ? '0.3' : '0.06'}) !important;
-        }
+/* 텔레그램 카드 자체의 스타일링을 콤팩트하고 고급스럽게 정의 */
+.tgme_widget_message {
+    max-width: 540px !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    margin: 0 auto !important;
+    box-sizing: border-box !important;
+    background: ${bgColor} !important;
+    border-radius: 12px !important;
+    border: ${theme === 'dark' ? "1px solid #1e293b" : "1px solid #e2e8f0"} !important;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, ${theme === 'dark' ? '0.3' : '0.06'}) !important;
+}
 
-        .tgme_widget_message_bubble {
-            height: auto !important;
-            min-height: 0 !important;
-            max-height: none !important;
-        }
+.tgme_widget_message_bubble {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+}
 
-        .tgme_widget_message_inline_button_wrap,
-        .tgme_widget_message_inline_button,
-        .tgme_widget_login,
-        .tgme_widget_message_popup {
-            display: none !important;
-        }
+.tgme_widget_message_inline_button_wrap,
+.tgme_widget_message_inline_button,
+.tgme_widget_login,
+.tgme_widget_message_popup {
+    display: none !important;
+}
 
-        /* 가독성을 높이기 위한 다크/라이트 텍스트 및 요소 색상 최적화 */
-        .tgme_widget_message_text {
-            color: ${theme === 'dark' ? '#f8fafc' : '#0f172a'} !important;
-        }
-        .tgme_widget_message_author, 
-        .tgme_widget_message_author * {
-            color: ${theme === 'dark' ? '#38bdf8' : '#0284c7'} !important;
-            font-weight: 600 !important;
-        }
-        .tgme_widget_message_meta,
-        .tgme_widget_message_meta * {
-            color: ${theme === 'dark' ? '#94a3b8' : '#64748b'} !important;
-        }
-      `;
+/* 가독성을 높이기 위한 다크/라이트 텍스트 및 요소 색상 최적화 */
+.tgme_widget_message_text {
+    color: ${theme === 'dark' ? '#f8fafc' : '#0f172a'} !important;
+}
+.tgme_widget_message_author, 
+.tgme_widget_message_author * {
+    color: ${theme === 'dark' ? '#38bdf8' : '#0284c7'} !important;
+    font-weight: 600 !important;
+}
+.tgme_widget_message_meta,
+.tgme_widget_message_meta * {
+    color: ${theme === 'dark' ? '#94a3b8' : '#64748b'} !important;
+}`.trim();
 
       await page.addStyleTag({ content: cssContent });
 
@@ -1323,6 +1947,288 @@ async function startServer() {
     res.send(htmlContent);
   });
 
+  // Dynamic YouTube Community Post HTML serve endpoint (for Microlink fallback)
+  app.get("/api/render-youtube-post", (req, res) => {
+    const channelName = req.query.channelName as string || "YouTube Creator";
+    const desc = req.query.desc as string || "";
+    const avatar = req.query.avatar as string || "";
+    const theme = req.query.theme as string || "light";
+    const publishedTime = req.query.publishedTime as string || "";
+    const voteCount = req.query.voteCount as string || "";
+    
+    const rawPostImages = req.query.postImage;
+    const postImages = rawPostImages ? (Array.isArray(rawPostImages) ? rawPostImages as string[] : [rawPostImages as string]) : [];
+
+    const isDark = theme === "dark";
+    const bgColor = isDark ? "#1f1f1f" : "#ffffff";
+    const textColor = isDark ? "#f1f1f1" : "#0f0f0f";
+    const subTextColor = isDark ? "#aaaaaa" : "#606060";
+    const borderColor = isDark ? "#3f3f3f" : "#e5e5e5";
+
+    const linkify = (text: string) => {
+      const urlRegex = /(https?:\/\/[^\s]+)/g;
+      return text.replace(urlRegex, (url) => {
+        return `<a href="${url}" style="color: #3ea6ff; text-decoration: none;" target="_blank">${url}</a>`;
+      });
+    };
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+          @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
+          
+          body {
+            margin: 0;
+            padding: 40px;
+            background: transparent;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Pretendard', 'Noto Sans KR', sans-serif;
+          }
+
+          .card {
+            width: 580px;
+            background: ${bgColor};
+            border: 1px solid ${borderColor};
+            border-radius: 24px;
+            padding: 24px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, ${isDark ? "0.4" : "0.08"});
+            box-sizing: border-box;
+          }
+
+          .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+          }
+
+          .avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 1px solid ${borderColor};
+          }
+
+          .creator-info {
+            display: flex;
+            flex-direction: column;
+          }
+
+          .creator-title-row {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+          }
+
+          .creator-name {
+            font-size: 16px;
+            font-weight: 700;
+            color: ${textColor};
+          }
+
+          .published-bullet {
+            font-size: 11px;
+            color: ${subTextColor};
+          }
+
+          .published-time {
+            font-size: 13px;
+            color: ${subTextColor};
+            font-weight: 400;
+          }
+
+          .post-badge {
+            font-size: 12px;
+            color: ${subTextColor};
+            margin-top: 2px;
+          }
+
+          .content {
+            font-size: 15px;
+            line-height: 1.6;
+            color: ${textColor};
+            white-space: pre-wrap;
+            word-break: break-word;
+          }
+
+          /* Post Images Styling */
+          .post-images-container {
+            margin-top: 16px;
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid ${borderColor};
+            box-sizing: border-box;
+          }
+
+          .post-image {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+          }
+
+          /* Single image layout */
+          .single-image {
+            max-height: 480px;
+          }
+          .single-image .post-image {
+            max-height: 480px;
+            object-fit: contain;
+            background: ${isDark ? "#0f0f0f" : "#f9f9f9"};
+          }
+
+          /* Multi images layout */
+          .multi-images {
+            display: grid;
+            gap: 4px;
+            height: 320px;
+            background: ${isDark ? "#0f0f0f" : "#f9f9f9"};
+          }
+
+          .grid-2 {
+            grid-template-columns: 1fr 1fr;
+          }
+
+          .grid-3 {
+            grid-template-columns: 2fr 1fr;
+          }
+          .grid-3 .post-image-wrapper:nth-child(2) {
+            grid-column: 2;
+            grid-row: 1;
+          }
+          .grid-3 .post-image-wrapper:nth-child(3) {
+            grid-column: 2;
+            grid-row: 2;
+          }
+
+          .grid-4 {
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+          }
+
+          .post-image-wrapper {
+            position: relative;
+            overflow: hidden;
+            height: 100%;
+          }
+
+          .more-images-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            font-weight: 700;
+          }
+
+          .footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-top: 1px solid ${borderColor};
+            padding-top: 14px;
+            margin-top: 20px;
+          }
+
+          .actions {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+          }
+
+          .action-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: ${textColor};
+            font-size: 13px;
+            font-weight: 500;
+          }
+
+          .action-icon {
+            width: 18px;
+            height: 18px;
+            color: ${isDark ? "#ffffff" : "#606060"};
+          }
+
+          .domain {
+            font-size: 11px;
+            font-weight: 500;
+            color: ${subTextColor};
+            font-family: monospace;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="card" id="youtube-post-card">
+          <div class="header">
+            ${avatar ? `<img class="avatar" src="${avatar}" />` : `<div class="avatar" style="background:#ef4444;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:18px;">YT</div>`}
+            <div class="creator-info">
+              <div class="creator-title-row">
+                <span class="creator-name">${escapeHtml(channelName)}</span>
+                ${publishedTime ? `<span class="published-bullet">•</span><span class="published-time">${escapeHtml(publishedTime)}</span>` : ""}
+              </div>
+              <span class="post-badge">YouTube Community Post</span>
+            </div>
+          </div>
+          <div class="content">${linkify(escapeHtml(desc))}</div>
+          
+          <!-- Render post images beautifully -->
+          ${postImages.length === 1 ? `
+            <div class="post-images-container single-image">
+              <img src="${postImages[0]}" class="post-image" />
+            </div>
+          ` : ""}
+
+          ${postImages.length > 1 ? `
+            <div class="post-images-container multi-images grid-${Math.min(postImages.length, 4)}">
+              ${postImages.slice(0, 4).map((img, idx) => `
+                <div class="post-image-wrapper">
+                  <img src="${img}" class="post-image" />
+                  ${postImages.length > 4 && idx === 3 ? `
+                    <div class="more-images-overlay">+${postImages.length - 4}</div>
+                  ` : ""}
+                </div>
+              `).join("")}
+            </div>
+          ` : ""}
+
+          <div class="footer">
+            <div class="actions">
+              <div class="action-btn">
+                <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>
+                <span>${escapeHtml(voteCount || "0")}</span>
+              </div>
+              <div class="action-btn">
+                <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>
+              </div>
+              <div class="action-btn">
+                <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M14 9V5l7 7-7 7v-4.1c-5 0-8.5 1.6-11 5.1 1-5 4-10 11-11.1z"/></svg>
+              </div>
+            </div>
+            <span class="domain">youtube.com</span>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+    res.send(htmlContent);
+  });
+
   // Unified Screenshot Endpoint
   app.post("/api/screenshot", async (req, res) => {
     const { url, platform, theme } = req.body;
@@ -1358,6 +2264,10 @@ async function startServer() {
       let finalPostId = "post";
       let title = "";
 
+      const protocol = req.headers["x-forwarded-proto"] || "https";
+      const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:3000";
+      const hostUrl = `${protocol}://${host}`;
+
       if (targetPlatform === "x") {
         const normalized = normalizeXPostUrl(url);
         if (!normalized) {
@@ -1367,14 +2277,10 @@ async function startServer() {
         finalUrl = normalized;
         finalPostId = extractXPostId(url) || "post";
       } else if (targetPlatform === "youtube") {
-        buffer = await captureYoutubePost(url, selectedTheme);
+        buffer = await captureYoutubePost(url, selectedTheme, hostUrl);
       } else if (targetPlatform === "telegram") {
         buffer = await captureTelegramPost(url, selectedTheme);
       } else if (targetPlatform === "youtube_thumb") {
-        const protocol = req.headers["x-forwarded-proto"] || "https";
-        const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:3000";
-        const hostUrl = `${protocol}://${host}`;
-
         const result = await captureYoutubeThumbnail(url, selectedTheme, hostUrl);
         buffer = result.buffer;
         finalUrl = result.watchUrl;
@@ -1384,12 +2290,14 @@ async function startServer() {
         return res.status(400).json({ error: "지원하지 않는 플랫폼입니다." });
       }
 
+      const isSvg = buffer.toString("utf-8").trim().startsWith("<svg") || buffer.toString("utf-8").trim().startsWith("<?xml");
+      const mimeType = isSvg ? "image/svg+xml" : "image/png";
       const base64Image = buffer.toString("base64");
 
       res.json({
         success: true,
-        image: `data:image/png;base64,${base64Image}`,
-        filename: `${targetPlatform}-post-${finalPostId}.png`,
+        image: `data:${mimeType};base64,${base64Image}`,
+        filename: `${targetPlatform}-post-${finalPostId}.${isSvg ? "svg" : "png"}`,
         postId: finalPostId,
         normalizedUrl: finalUrl,
         title: title || undefined,

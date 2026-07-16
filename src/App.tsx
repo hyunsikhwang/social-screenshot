@@ -54,6 +54,107 @@ const detectPlatform = (urlStr: string): Platform | null => {
   return null;
 };
 
+// Helper to convert SVG data URL (base64) to PNG data URL client-side
+const convertSvgToPng = (svgDataUrl: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    try {
+      // Decode SVG content from the data URL safely
+      let svgText = "";
+      if (svgDataUrl.startsWith("data:image/svg+xml;base64,")) {
+        const base64Str = svgDataUrl.substring("data:image/svg+xml;base64,".length);
+        // Safe UTF-8 decoding from base64 to avoid corrupting Korean characters
+        const binStr = atob(base64Str);
+        const bytes = new Uint8Array(binStr.length);
+        for (let i = 0; i < binStr.length; i++) {
+          bytes[i] = binStr.charCodeAt(i);
+        }
+        svgText = new TextDecoder("utf-8").decode(bytes);
+      } else if (svgDataUrl.startsWith("data:image/svg+xml,")) {
+        svgText = decodeURIComponent(svgDataUrl.substring("data:image/svg+xml,".length));
+      } else {
+        svgText = svgDataUrl;
+      }
+
+      // XML 파싱 에러의 주범인 &nbsp; 를 완벽 방지하기 위해 &#160; 또는 일반 공백으로 치환
+      svgText = svgText.replace(/&nbsp;/g, "&#160;");
+
+      // Extract explicit design height and width attributes from the SVG text as a solid fallback
+      let width = 600;
+      let height = 400;
+      try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(svgText, "image/svg+xml");
+        
+        // 파싱 에러 검사 및 특수 유니코드 대체
+        const parserError = doc.querySelector("parsererror");
+        if (parserError) {
+          console.warn("SVG XML Parsing Error detected, attempting to sanitize & rebuild:", parserError.textContent);
+          svgText = svgText
+            .replace(/&middot;/g, "&#183;")
+            .replace(/&lsquo;/g, "&#8216;")
+            .replace(/&rsquo;/g, "&#8217;")
+            .replace(/&ldquo;/g, "&#8220;")
+            .replace(/&rdquo;/g, "&#8221;");
+        }
+
+        const svgElement = doc.querySelector("svg");
+        if (svgElement) {
+          width = parseFloat(svgElement.getAttribute("width") || "600");
+          height = parseFloat(svgElement.getAttribute("height") || "400");
+        }
+      } catch (e) {
+        console.warn("Failed to parse SVG dimensions for fallback rendering:", e);
+      }
+
+      const img = new Image();
+      // IMPORTANT: DO NOT set crossOrigin under any circumstances for data URLs as it triggers browser CORS loading errors.
+      
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          const scale = 2; // High-DPI scale for ultra-crisp output matching natural rendering quality!
+          
+          const finalWidth = img.naturalWidth || width || img.width || 600;
+          const finalHeight = img.naturalHeight || height || img.height || 400;
+
+          canvas.width = finalWidth * scale;
+          canvas.height = finalHeight * scale;
+
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            reject(new Error("Canvas context is null"));
+            return;
+          }
+
+          ctx.scale(scale, scale);
+          ctx.drawImage(img, 0, 0, finalWidth, finalHeight);
+
+          const pngDataUrl = canvas.toDataURL("image/png");
+          resolve(pngDataUrl);
+        } catch (err) {
+          reject(err);
+        }
+      };
+
+      img.onerror = (err) => {
+        console.error("Failed to load SVG data URL as Image client-side:", err);
+        reject(new Error("Failed to load SVG as an image on client-side"));
+      };
+
+      // Safely encode the SVG to clean Base64 with UTF-8 support
+      const utf8Bytes = new TextEncoder().encode(svgText);
+      let binary = "";
+      for (let i = 0; i < utf8Bytes.length; i++) {
+        binary += String.fromCharCode(utf8Bytes[i]);
+      }
+      const safeBase64 = btoa(binary);
+      img.src = `data:image/svg+xml;base64,${safeBase64}`;
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
+
 export default function App() {
   // Input Form States
   const [url, setUrl] = useState("");
@@ -186,9 +287,22 @@ export default function App() {
         throw new Error(data.error || "스크린샷 캡처에 실패했습니다.");
       }
 
+      let imageUrl = data.image;
+      let filename = data.filename;
+
+      if (imageUrl.startsWith("data:image/svg+xml") || filename.endsWith(".svg")) {
+        console.log("SVG detected from server. Converting to high-DPI PNG on client-side...");
+        try {
+          imageUrl = await convertSvgToPng(imageUrl);
+          filename = filename.replace(/\.svg$/, ".png");
+        } catch (convErr) {
+          console.error("Failed to convert SVG to PNG client-side:", convErr);
+        }
+      }
+
       const newScreenshot = {
-        imageUrl: data.image,
-        filename: data.filename,
+        imageUrl,
+        filename,
         normalizedUrl: data.normalizedUrl,
         postId: data.postId,
       };
@@ -202,8 +316,8 @@ export default function App() {
         platform: data.platform || platform,
         theme,
         timestamp: new Date().toISOString(),
-        imageUrl: data.image,
-        filename: data.filename,
+        imageUrl,
+        filename,
         normalizedUrl: data.normalizedUrl,
       };
 
@@ -245,26 +359,114 @@ export default function App() {
     }
   };
 
-  // Direct PNG Copy to Clipboard
-  const handleCopyToClipboard = async () => {
+  // Download with on-the-fly client-side conversion as a bulletproof failsafe!
+  const handleDownload = async (e: React.MouseEvent<HTMLAnchorElement>) => {
     if (!activeScreenshot) return;
-    setCopyStatus("loading");
 
+    if (activeScreenshot.imageUrl.startsWith("data:image/svg+xml") || activeScreenshot.filename.endsWith(".svg")) {
+      e.preventDefault();
+      try {
+        console.log("[Failsafe Download] Actively converting SVG to high-DPI PNG on-the-fly...");
+        const pngUrl = await convertSvgToPng(activeScreenshot.imageUrl);
+        const cleanFilename = activeScreenshot.filename.replace(/\.svg$/, ".png");
+        
+        const link = document.createElement("a");
+        link.href = pngUrl;
+        link.download = cleanFilename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        // Update active screenshot state so future clicks don't need re-conversion
+        setActiveScreenshot((prev) =>
+          prev ? { ...prev, imageUrl: pngUrl, filename: cleanFilename } : null
+        );
+      } catch (err) {
+        console.error("[Failsafe Download] Conversion failed, fallback to native SVG download:", err);
+        const link = document.createElement("a");
+        link.href = activeScreenshot.imageUrl;
+        link.download = activeScreenshot.filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+    }
+  };
+
+// Direct PNG Copy to Clipboard for any image URL (with Canvas drawing fallback)
+  const copyImageToClipboard = async (imageUrl: string) => {
+    setCopyStatus("loading");
     try {
-      const response = await fetch(activeScreenshot.imageUrl);
+      const response = await fetch(imageUrl);
       const blob = await response.blob();
+      const mimeType = blob.type || "image/png";
       await navigator.clipboard.write([
         new ClipboardItem({
-          [blob.type]: blob,
+          [mimeType]: blob,
         }),
       ]);
       setCopyStatus("copied");
       setTimeout(() => setCopyStatus("idle"), 2500);
     } catch (err) {
-      console.error("Clipboard copy failed:", err);
-      setCopyStatus("error");
-      setTimeout(() => setCopyStatus("idle"), 2500);
+      console.warn("Clipboard copy via Fetch Blob failed, trying canvas rendering fallback...", err);
+      try {
+        const img = new Image();
+        img.onload = async () => {
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.drawImage(img, 0, 0);
+              canvas.toBlob(async (b) => {
+                if (b) {
+                  try {
+                    await navigator.clipboard.write([
+                      new ClipboardItem({
+                        ["image/png"]: b,
+                      }),
+                    ]);
+                    setCopyStatus("copied");
+                    setTimeout(() => setCopyStatus("idle"), 2500);
+                  } catch (e2) {
+                    console.error("Canvas fallback clipboard copy failed:", e2);
+                    setCopyStatus("error");
+                    setTimeout(() => setCopyStatus("idle"), 2500);
+                  }
+                } else {
+                  setCopyStatus("error");
+                  setTimeout(() => setCopyStatus("idle"), 2500);
+                }
+              }, "image/png");
+            } else {
+              setCopyStatus("error");
+              setTimeout(() => setCopyStatus("idle"), 2500);
+            }
+          } catch (e1) {
+            console.error("Canvas context setup failed:", e1);
+            setCopyStatus("error");
+            setTimeout(() => setCopyStatus("idle"), 2500);
+          }
+        };
+        img.onerror = () => {
+          console.error("Image loading failed for clipboard fallback");
+          setCopyStatus("error");
+          setTimeout(() => setCopyStatus("idle"), 2500);
+        };
+        img.src = imageUrl;
+      } catch (fallbackErr) {
+        console.error("All copy strategies exhausted:", fallbackErr);
+        setCopyStatus("error");
+        setTimeout(() => setCopyStatus("idle"), 2500);
+      }
     }
+  };
+
+  // Direct PNG Copy to Clipboard
+  const handleCopyToClipboard = async () => {
+    if (!activeScreenshot) return;
+    await copyImageToClipboard(activeScreenshot.imageUrl);
   };
 
   // Intent share URL builders
@@ -525,10 +727,8 @@ export default function App() {
               setActiveScreenshot((prev) =>
                 prev ? { ...prev, imageUrl: imgUrl } : { imageUrl: imgUrl, filename: "captured.png", normalizedUrl: "", postId: "" }
               );
-              // Direct clipboard copy
-              navigator.clipboard.writeText(imgUrl);
-              setCopyStatus("copied");
-              setTimeout(() => setCopyStatus("idle"), 2000);
+              // Direct image binary copy
+              copyImageToClipboard(imgUrl);
             }}
           />
         </section>
@@ -634,6 +834,7 @@ export default function App() {
                   <a
                     href={activeScreenshot.imageUrl}
                     download={activeScreenshot.filename}
+                    onClick={handleDownload}
                     id="download-clean-png-btn"
                     className="flex items-center justify-center gap-2 py-3 px-4 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/15 text-xs tracking-wide transition-all cursor-pointer"
                   >
