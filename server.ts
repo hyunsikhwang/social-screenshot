@@ -228,6 +228,31 @@ function extractXPostId(url: string): string | null {
   }
 }
 
+// Temporary in-memory cache for render endpoints to avoid HTTP 414 (Request-URI Too Large) when sending URLs to Microlink
+interface RenderData {
+  channelName?: string;
+  desc?: string;
+  avatar?: string;
+  theme?: string;
+  publishedTime?: string;
+  voteCount?: string;
+  postImages?: string[];
+  videoId?: string;
+  title?: string;
+  createdAt: number;
+}
+
+const renderDataStore = new Map<string, RenderData>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, data] of renderDataStore.entries()) {
+    if (now - data.createdAt > 15 * 60 * 1000) {
+      renderDataStore.delete(id);
+    }
+  }
+}, 5 * 60 * 1000);
+
 // Unified fallback capture using Microlink API (for when local headless Chromium cannot launch)
 async function captureViaMicrolink(targetUrl: string, elementSelector: string, theme: "light" | "dark"): Promise<Buffer> {
   console.log(`[Microlink Fallback] Running capture for: ${targetUrl}, selector: ${elementSelector}, theme: ${theme}`);
@@ -260,7 +285,103 @@ async function captureViaMicrolink(targetUrl: string, elementSelector: string, t
   // Optimize waiting conditions and viewports depending on platform url
   if (targetUrl.includes("x.com") || targetUrl.includes("twitter.com")) {
     params.append("screenshot.waitFor", "article");
-    params.append("screenshot.delay", "3000");
+    params.append("screenshot.delay", "4000");
+    params.append("viewport.width", "1280");
+    params.append("viewport.height", "1000");
+
+    const isDark = theme === "dark";
+    const xBgColor = isDark ? "#000000" : "#ffffff";
+    const xBorderColor = isDark ? "#2f3336" : "#eff3f4";
+
+    const xCss = `
+      header[role="banner"],
+      [data-testid="SideNav_AccountSidebar_Button"],
+      nav[role="navigation"],
+      div[data-testid="sidebarColumn"],
+      div[data-testid="BottomBar"],
+      #layers,
+      div[id="layers"],
+      #layers *,
+      div[id="layers"] *,
+      div[role="dialog"],
+      div[role="dialog"] *,
+      div[role="alertdialog"],
+      div[role="alertdialog"] *,
+      div[data-testid="sheetDialog"],
+      div[data-testid="sheetDialog"] *,
+      div[data-testid="mask"],
+      div[data-testid="mask"] *,
+      div[data-testid="loginSheet"],
+      div[data-testid="loginSheet"] *,
+      div[data-testid="InAppBrowserPrompt"],
+      div[data-testid="InAppBrowserPrompt"] *,
+      [data-testid*="sheet"],
+      [data-testid*="sheet"] *,
+      [data-testid*="dialog"],
+      [data-testid*="dialog"] *,
+      [data-testid*="modal"],
+      [data-testid*="modal"] *,
+      [data-testid*="prompt"],
+      [data-testid*="prompt"] *,
+      [data-testid*="AppPromote"],
+      [data-testid*="AppPromote"] *,
+      [data-testid*="app_installation"],
+      [data-testid*="app_installation"] *,
+      [data-testid*="open_in_app"],
+      [data-testid*="open_in_app"] *,
+      [data-testid*="banner"],
+      [data-testid*="banner"] *,
+      [data-testid*="Banner"],
+      [data-testid*="Banner"] *,
+      div[role="progressbar"] {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        width: 0 !important;
+        height: 0 !important;
+        max-height: 0 !important;
+        position: absolute !important;
+        top: -9999px !important;
+        left: -9999px !important;
+        z-index: -99999 !important;
+      }
+      main[role="main"] > div > div > div > div:first-child {
+        display: none !important;
+      }
+      main[role="main"] {
+        align-items: center !important;
+        justify-content: center !important;
+        background: ${xBgColor} !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      div[data-testid="primaryColumn"] {
+        max-width: 600px !important;
+        width: 100% !important;
+        margin: 0 auto !important;
+        border: none !important;
+        background: ${xBgColor} !important;
+      }
+      html, body {
+        background-color: ${xBgColor} !important;
+        background: ${xBgColor} !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+      }
+      article {
+        border: 1px solid ${xBorderColor} !important;
+        border-radius: 16px !important;
+        margin: 12px !important;
+        padding: 16px !important;
+        background: ${xBgColor} !important;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, ${isDark ? "0.4" : "0.04"}) !important;
+      }
+    `.replace(/\s+/g, " ").trim();
+
+    params.append("styles", xCss);
   } else if (targetUrl.includes("t.me") || targetUrl.includes("telegram.me")) {
     params.append("screenshot.waitFor", ".tgme_widget_message");
     params.append("screenshot.delay", "3000");
@@ -414,12 +535,11 @@ async function captureViaMicrolink(targetUrl: string, elementSelector: string, t
   let response = await fetch(apiUrl);
   
   // If the initial request fails (e.g., selector not found because of a login wall or consent screen)
-  if (!response.ok && (params.has("screenshot.waitFor") || params.has("element") || params.has("styles"))) {
-    console.warn(`[Microlink Fallback] Initial request failed with HTTP ${response.status}. Retrying without selector/styles...`);
+  if (!response.ok && (params.has("screenshot.waitFor") || params.has("element"))) {
+    console.warn(`[Microlink Fallback] Initial request failed with HTTP ${response.status}. Retrying without selector constraints but keeping styles...`);
     const retryParams = new URLSearchParams(params);
     retryParams.delete("screenshot.waitFor");
     retryParams.delete("element");
-    retryParams.delete("styles");
     
     const retryApiUrl = `https://api.microlink.io/?${retryParams.toString()}`;
     const retryResponse = await fetch(retryApiUrl);
@@ -539,14 +659,72 @@ async function captureXPost(postUrl: string, theme: "light" | "dark" = "light"):
       }
 
       // Inject fonts & styles
-      const cssContent = `@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap');
-html, body {
-  background: ${pageColor} !important;
-}
-article, article * {
-  font-family: 'Pretendard', 'Noto Sans KR', 'Noto Sans SC', 'Noto Sans JP', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif !important;
-}`.trim();
+      const cssContent = `
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap');
+        
+        html, body {
+          background: ${pageColor} !important;
+        }
+        
+        /* Hide banners, sidebars, layers that can float or overlap */
+        header[role="banner"],
+        [data-testid="SideNav_AccountSidebar_Button"],
+        nav[role="navigation"],
+        div[data-testid="sidebarColumn"],
+        div[data-testid="BottomBar"],
+        #layers,
+        div[id="layers"],
+        #layers *,
+        div[id="layers"] *,
+        div[role="dialog"],
+        div[role="dialog"] *,
+        div[role="alertdialog"],
+        div[role="alertdialog"] *,
+        div[data-testid="sheetDialog"],
+        div[data-testid="sheetDialog"] *,
+        div[data-testid="mask"],
+        div[data-testid="mask"] *,
+        div[data-testid="loginSheet"],
+        div[data-testid="loginSheet"] *,
+        div[data-testid="InAppBrowserPrompt"],
+        div[data-testid="InAppBrowserPrompt"] *,
+        [data-testid*="sheet"],
+        [data-testid*="sheet"] *,
+        [data-testid*="dialog"],
+        [data-testid*="dialog"] *,
+        [data-testid*="modal"],
+        [data-testid*="modal"] *,
+        [data-testid*="prompt"],
+        [data-testid*="prompt"] *,
+        [data-testid*="AppPromote"],
+        [data-testid*="AppPromote"] *,
+        [data-testid*="app_installation"],
+        [data-testid*="app_installation"] *,
+        [data-testid*="open_in_app"],
+        [data-testid*="open_in_app"] *,
+        [data-testid*="banner"],
+        [data-testid*="banner"] *,
+        [data-testid*="Banner"],
+        [data-testid*="Banner"] *,
+        div[role="progressbar"] {
+          display: none !important;
+          visibility: hidden !important;
+          opacity: 0 !important;
+          pointer-events: none !important;
+          width: 0 !important;
+          height: 0 !important;
+          max-height: 0 !important;
+          position: absolute !important;
+          top: -9999px !important;
+          left: -9999px !important;
+          z-index: -99999 !important;
+        }
+        
+        article, article * {
+          font-family: 'Pretendard', 'Noto Sans KR', 'Noto Sans SC', 'Noto Sans JP', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif !important;
+        }
+      `.trim();
 
       try {
         await page.addStyleTag({ content: cssContent });
@@ -554,6 +732,7 @@ article, article * {
         await page.addStyleTag({
           content: `
             html, body { background: ${pageColor} !important; }
+            header[role="banner"], div[data-testid="sidebarColumn"], div[data-testid="BottomBar"], #layers { display: none !important; }
             article, article * { font-family: sans-serif !important; }
           `
         });
@@ -629,7 +808,31 @@ article, article * {
         await page.waitForTimeout(250);
       }
 
-      await page.waitForTimeout(800);
+      await page.evaluate(() => {
+        const popupSelectors = [
+          '#layers',
+          'div[id="layers"]',
+          'div[role="dialog"]',
+          'div[role="alertdialog"]',
+          '[data-testid="sheetDialog"]',
+          '[data-testid="mask"]',
+          '[data-testid="loginSheet"]',
+          '[data-testid="InAppBrowserPrompt"]',
+          '[data-testid="BottomBar"]',
+          '[data-testid*="sheet"]',
+          '[data-testid*="dialog"]',
+          '[data-testid*="modal"]',
+          '[data-testid*="prompt"]',
+          '[data-testid*="AppPromote"]',
+          '[data-testid*="app_installation"]',
+          '[data-testid*="open_in_app"]',
+        ];
+        popupSelectors.forEach(selector => {
+          document.querySelectorAll(selector).forEach(el => el.remove());
+        });
+      });
+
+      await page.waitForTimeout(500);
       const screenshotBuffer = await tweet.screenshot({ type: "png" });
       return screenshotBuffer;
     } finally {
@@ -1105,25 +1308,24 @@ ytd-backstage-post-renderer a, ytd-backstage-post-renderer span[class*="hashtag"
         }
       }
 
-      // Fallback: If no post images were extracted via JSON but ogImageFromMeta exists and is not equal to parsed channel avatar, use it.
-      if (postImages.length === 0 && ogImageFromMeta && ogImageFromMeta !== ogImage) {
-        postImages.push(ogImageFromMeta);
-      }
+      // Note: Do NOT use ogImageFromMeta as postImages fallback because YouTube's og:image meta tag is the channel profile avatar, not a post image.
 
       console.log(`[captureYoutubePost Fallback] Redirecting to Microlink with dynamic page rendering... Images found: ${postImages.length}`);
       const finalHost = hostUrl || "https://ais-dev-errgpu747quwousyeut56p-220065767305.asia-northeast1.run.app";
-      const params = new URLSearchParams({
+      
+      const renderId = Math.random().toString(36).substring(2, 12) + Date.now().toString(36);
+      renderDataStore.set(renderId, {
         channelName,
         desc: ogDesc,
         avatar: ogImage,
         theme,
         publishedTime,
-        voteCount
+        voteCount,
+        postImages,
+        createdAt: Date.now()
       });
-      if (postImages && postImages.length > 0) {
-        postImages.forEach(img => params.append("postImage", img));
-      }
-      const renderUrl = `${finalHost}/api/render-youtube-post?${params.toString()}`;
+
+      const renderUrl = `${finalHost}/api/render-youtube-post?id=${renderId}`;
       return await captureViaMicrolink(renderUrl, "#youtube-post-card", theme);
     } catch (fallbackErr: any) {
       console.error("[captureYoutubePost] Meta extraction fallback also failed:", fallbackErr);
@@ -1739,7 +1941,15 @@ async function captureYoutubeThumbnail(
     
     // Construct public render url using the supplied hostUrl or a reliable default
     const finalHost = hostUrl || "https://ais-dev-errgpu747quwousyeut56p-220065767305.asia-northeast1.run.app";
-    const renderUrl = `${finalHost}/api/render-youtube-thumb?videoId=${videoId}&title=${encodeURIComponent(title)}&theme=${theme}`;
+    const renderId = Math.random().toString(36).substring(2, 12) + Date.now().toString(36);
+    renderDataStore.set(renderId, {
+      videoId,
+      title,
+      theme,
+      createdAt: Date.now()
+    });
+
+    const renderUrl = `${finalHost}/api/render-youtube-thumb?id=${renderId}`;
     
     const buffer = await captureViaMicrolink(renderUrl, "#youtube-thumb-card", theme);
     return { buffer, title, watchUrl, videoId };
@@ -1760,9 +1970,12 @@ async function startServer() {
 
   // Dynamic YouTube Thumbnail HTML serve endpoint (for Microlink fallback)
   app.get("/api/render-youtube-thumb", (req, res) => {
-    const videoId = req.query.videoId as string || "dQw4w9WgXcQ";
-    const title = req.query.title as string || "YouTube Video";
-    const theme = req.query.theme as string || "light";
+    const id = req.query.id as string;
+    const cached = id ? renderDataStore.get(id) : null;
+
+    const videoId = cached?.videoId || req.query.videoId as string || "dQw4w9WgXcQ";
+    const title = cached?.title || req.query.title as string || "YouTube Video";
+    const theme = (cached?.theme || req.query.theme as string || "light") as "light" | "dark";
 
     const isDark = theme === "dark";
     const bgColor = isDark ? "#121212" : "#ffffff";
@@ -1949,15 +2162,23 @@ async function startServer() {
 
   // Dynamic YouTube Community Post HTML serve endpoint (for Microlink fallback)
   app.get("/api/render-youtube-post", (req, res) => {
-    const channelName = req.query.channelName as string || "YouTube Creator";
-    const desc = req.query.desc as string || "";
-    const avatar = req.query.avatar as string || "";
-    const theme = req.query.theme as string || "light";
-    const publishedTime = req.query.publishedTime as string || "";
-    const voteCount = req.query.voteCount as string || "";
+    const id = req.query.id as string;
+    const cached = id ? renderDataStore.get(id) : null;
+
+    const channelName = cached?.channelName || req.query.channelName as string || "YouTube Creator";
+    const desc = (cached?.desc || req.query.desc as string || "").trim();
+    const avatar = cached?.avatar || req.query.avatar as string || "";
+    const theme = (cached?.theme || req.query.theme as string || "light") as "light" | "dark";
+    const publishedTime = cached?.publishedTime || req.query.publishedTime as string || "";
+    const voteCount = cached?.voteCount || req.query.voteCount as string || "";
     
-    const rawPostImages = req.query.postImage;
-    const postImages = rawPostImages ? (Array.isArray(rawPostImages) ? rawPostImages as string[] : [rawPostImages as string]) : [];
+    let postImages: string[] = [];
+    if (cached?.postImages) {
+      postImages = cached.postImages;
+    } else {
+      const rawPostImages = req.query.postImage;
+      postImages = rawPostImages ? (Array.isArray(rawPostImages) ? rawPostImages as string[] : [rawPostImages as string]) : [];
+    }
 
     const isDark = theme === "dark";
     const bgColor = isDark ? "#1f1f1f" : "#ffffff";
@@ -1996,8 +2217,8 @@ async function startServer() {
             width: 580px;
             background: ${bgColor};
             border: 1px solid ${borderColor};
-            border-radius: 24px;
-            padding: 24px;
+            border-radius: 20px;
+            padding: 20px 24px 14px 24px;
             box-shadow: 0 12px 40px rgba(0, 0, 0, ${isDark ? "0.4" : "0.08"});
             box-sizing: border-box;
           }
@@ -2140,8 +2361,8 @@ async function startServer() {
             align-items: center;
             justify-content: space-between;
             border-top: 1px solid ${borderColor};
-            padding-top: 14px;
-            margin-top: 20px;
+            padding-top: 12px;
+            margin-top: 16px;
           }
 
           .actions {
