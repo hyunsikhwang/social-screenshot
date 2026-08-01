@@ -9,6 +9,10 @@ interface PresetUrlsProps {
 const PRESETS: Record<Platform, { label: string; url: string }[]> = {
   auto: [
     {
+      label: "Starship Flight 13 Video (X)",
+      url: "https://x.com/Elonspacemedia/status/2081943125254103210",
+    },
+    {
       label: "SpaceX Launch (X)",
       url: "https://x.com/SpaceX/status/1801229789311094943",
     },
@@ -20,12 +24,12 @@ const PRESETS: Record<Platform, { label: string; url: string }[]> = {
       label: "MKBHD Video (YT-Thumb)",
       url: "https://www.youtube.com/watch?v=dtp6b76pMak",
     },
-    {
-      label: "MKBHD Community (YT-Post)",
-      url: "https://www.youtube.com/post/UgkxvC2p1bXitU0L6P779A9S9h0zVlUuD_Oa",
-    },
   ],
   x: [
+    {
+      label: "Starship Flight 13 Booster",
+      url: "https://x.com/Elonspacemedia/status/2081943125254103210",
+    },
     {
       label: "SpaceX Starship Launch",
       url: "https://x.com/SpaceX/status/1801229789311094943",
@@ -33,6 +37,16 @@ const PRESETS: Record<Platform, { label: string; url: string }[]> = {
     {
       label: "NASA Webb Telescope",
       url: "https://x.com/NASAWebb/status/1783151978377757041",
+    },
+  ],
+  x_video: [
+    {
+      label: "🚀 33 Raptor Engines Flight 13 (Elonspacemedia)",
+      url: "https://x.com/Elonspacemedia/status/2081943125254103210",
+    },
+    {
+      label: "🚀 SpaceX Starship Launch Video",
+      url: "https://x.com/SpaceX/status/1801229789311094943",
     },
   ],
   youtube: [
@@ -63,6 +77,26 @@ const PRESETS: Record<Platform, { label: string; url: string }[]> = {
     {
       label: "Duurov's Channel (Pavel Durov)",
       url: "https://telegram.me/s/durov/251",
+    },
+  ],
+  telegram_video: [
+    {
+      label: "🎬 Auto-Save Media Video (Telegram)",
+      url: "https://t.me/telegram/220",
+    },
+    {
+      label: "🎬 Telegram Video Post",
+      url: "https://telegram.me/s/telegram/220",
+    },
+  ],
+  telegram_image: [
+    {
+      label: "🖼️ Telegram October Features Photo",
+      url: "https://t.me/telegram/200",
+    },
+    {
+      label: "🖼️ Fragment Collectibles Photo",
+      url: "https://telegram.me/s/telegram/201",
     },
   ],
 };

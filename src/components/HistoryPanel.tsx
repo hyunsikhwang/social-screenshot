@@ -1,5 +1,5 @@
 import React from "react";
-import { Trash2, Download, Copy, ExternalLink, Calendar, Twitter, Youtube, Send, Image } from "lucide-react";
+import { Trash2, Download, Copy, ExternalLink, Calendar, Twitter, Youtube, Send, Image, Video } from "lucide-react";
 import { ScreenshotHistoryItem } from "../types";
 
 interface HistoryPanelProps {
@@ -33,12 +33,18 @@ export default function HistoryPanel({
     switch (platform) {
       case "x":
         return <Twitter className="w-3.5 h-3.5 text-sky-500" />;
+      case "x_video":
+        return <Video className="w-3.5 h-3.5 text-indigo-500" />;
       case "youtube":
         return <Youtube className="w-3.5 h-3.5 text-rose-500" />;
       case "youtube_thumb":
         return <Image className="w-3.5 h-3.5 text-red-500" />;
       case "telegram":
         return <Send className="w-3.5 h-3.5 text-cyan-500" />;
+      case "telegram_video":
+        return <Video className="w-3.5 h-3.5 text-teal-500" />;
+      case "telegram_image":
+        return <Image className="w-3.5 h-3.5 text-emerald-500" />;
       default:
         return null;
     }
@@ -48,12 +54,18 @@ export default function HistoryPanel({
     switch (platform) {
       case "x":
         return "X (Twitter)";
+      case "x_video":
+        return "X Video";
       case "youtube":
         return "YouTube Post";
       case "youtube_thumb":
         return "YouTube Thumb";
       case "telegram":
         return "Telegram";
+      case "telegram_video":
+        return "TG Video";
+      case "telegram_image":
+        return "TG Image";
       default:
         return platform;
     }

@@ -17,9 +17,11 @@ import {
   Sparkles,
   Share2,
   Image,
+  Video,
+  Film,
 } from "lucide-react";
 
-import { Platform, Theme, ScreenshotHistoryItem } from "./types";
+import { Platform, Theme, ScreenshotHistoryItem, VideoMediaInfo, ImageMediaInfo } from "./types";
 import PlatformTabs from "./components/PlatformTabs";
 import PresetUrls from "./components/PresetUrls";
 import HistoryPanel from "./components/HistoryPanel";
@@ -169,14 +171,152 @@ export default function App() {
   
   // Current Screenshot result
   const [activeScreenshot, setActiveScreenshot] = useState<{
-    imageUrl: string;
+    imageUrl?: string;
     filename: string;
     normalizedUrl: string;
     postId: string;
+    platform?: Platform;
+    videoInfo?: VideoMediaInfo;
+    imageInfo?: ImageMediaInfo;
   } | null>(null);
 
   // Copy to clipboard status
   const [copyStatus, setCopyStatus] = useState<"idle" | "loading" | "copied" | "error">("idle");
+
+  // Display Modes
+  const [videoDisplayMode, setVideoDisplayMode] = useState<"gif" | "player">("gif");
+  const [imageDisplayMode, setImageDisplayMode] = useState<"gallery" | "card">("gallery");
+  const [imageCopyIndex, setImageCopyIndex] = useState<number | null>(null);
+
+  // GIF Conversion States
+  const [gifStartTime, setGifStartTime] = useState<number>(0);
+  const [gifDuration, setGifDuration] = useState<number | "full">(5);
+  const [gifScale, setGifScale] = useState<number>(480);
+  const [gifFps, setGifFps] = useState<number>(10);
+  const [gifConverting, setGifConverting] = useState<boolean>(false);
+  const [gifResult, setGifResult] = useState<{
+    gifUrl?: string;
+    gifDataUrl: string;
+    filename: string;
+    sizeMb: string;
+  } | null>(null);
+  const [gifCopyStatus, setGifCopyStatus] = useState<"idle" | "copied" | "error">("idle");
+
+  const handleConvertToGif = async (overrideParams?: {
+    videoUrl?: string;
+    startTime?: number;
+    duration?: number | "full";
+    scale?: number;
+    fps?: number;
+  }) => {
+    const targetVideoUrl = overrideParams?.videoUrl || activeScreenshot?.videoInfo?.videoUrl;
+    if (!targetVideoUrl) return;
+
+    setGifConverting(true);
+    setGifCopyStatus("idle");
+
+    const reqStartTime = overrideParams?.startTime ?? gifStartTime;
+    const reqDuration = overrideParams?.duration ?? gifDuration;
+    const reqScale = overrideParams?.scale ?? gifScale;
+    const reqFps = overrideParams?.fps ?? gifFps;
+
+    try {
+      const res = await fetch("/api/convert-to-gif", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          videoUrl: targetVideoUrl,
+          startTime: reqStartTime,
+          duration: reqDuration,
+          scale: reqScale,
+          fps: reqFps,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "GIF 변환에 실패했습니다.");
+      }
+
+      setGifResult({
+        gifUrl: data.gifUrl,
+        gifDataUrl: data.gifDataUrl,
+        filename: `video-${activeScreenshot?.postId || Date.now()}.gif`,
+        sizeMb: data.sizeMb,
+      });
+    } catch (e: any) {
+      console.error("GIF conversion failed:", e);
+    } finally {
+      setGifConverting(false);
+    }
+  };
+
+  // Auto convert to Animated GIF when video media is loaded
+  useEffect(() => {
+    if (activeScreenshot?.videoInfo?.videoUrl) {
+      setVideoDisplayMode("gif");
+      const vUrl = activeScreenshot.videoInfo.videoUrl;
+      const totalSecs = Math.max(1, Math.floor((activeScreenshot.videoInfo.durationMs || 10000) / 1000));
+      const fullDuration = Math.min(30, totalSecs); // 전체 재생 길이 (최대 30초)
+      const scale = 480; // 중간 수준 해상도 (480p)
+      const fps = 10;   // 중간 수준 프레임 (10 FPS)
+
+      setGifDuration(fullDuration);
+      setGifStartTime(0);
+      setGifScale(scale);
+      setGifFps(fps);
+
+      handleConvertToGif({
+        videoUrl: vUrl,
+        startTime: 0,
+        duration: fullDuration,
+        scale,
+        fps,
+      });
+    } else {
+      setGifResult(null);
+    }
+  }, [activeScreenshot?.videoInfo?.videoUrl]);
+
+  const handleCopyGifToClipboard = async () => {
+    const srcUrl = gifResult?.gifUrl || gifResult?.gifDataUrl;
+    if (!srcUrl) return;
+    try {
+      const res = await fetch(srcUrl);
+      const blob = await res.blob();
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({ [blob.type]: blob }),
+        ]);
+      } catch (err) {
+        // Fallback to canvas PNG blob copy
+        const img = new Image();
+        img.src = srcUrl;
+        await new Promise((resolve) => { img.onload = resolve; });
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        ctx?.drawImage(img, 0, 0);
+        await new Promise<void>((resolve) => {
+          canvas.toBlob(async (pngBlob) => {
+            if (pngBlob) {
+              await navigator.clipboard.write([
+                new ClipboardItem({ "image/png": pngBlob }),
+              ]);
+            }
+            resolve();
+          }, "image/png");
+        });
+      }
+      setGifCopyStatus("copied");
+      setTimeout(() => setGifCopyStatus("idle"), 3000);
+    } catch (e) {
+      console.error("Copy GIF failed:", e);
+      setGifCopyStatus("error");
+      setTimeout(() => setGifCopyStatus("idle"), 3000);
+    }
+  };
 
   // History State
   const [history, setHistory] = useState<ScreenshotHistoryItem[]>([]);
@@ -259,6 +399,8 @@ export default function App() {
     setIsLoading(true);
     setError(null);
     setCopyStatus("idle");
+    setGifResult(null);
+    setGifStartTime(0);
 
     // Smooth scroll to preview workspace on mobile/tablet so user sees live logs & result
     setTimeout(() => {
@@ -287,10 +429,10 @@ export default function App() {
         throw new Error(data.error || "스크린샷 캡처에 실패했습니다.");
       }
 
-      let imageUrl = data.image;
+      let imageUrl = data.image || data.videoInfo?.thumbnailUrl || "";
       let filename = data.filename;
 
-      if (imageUrl.startsWith("data:image/svg+xml") || filename.endsWith(".svg")) {
+      if (imageUrl && (imageUrl.startsWith("data:image/svg+xml") || filename.endsWith(".svg"))) {
         console.log("SVG detected from server. Converting to high-DPI PNG on client-side...");
         try {
           imageUrl = await convertSvgToPng(imageUrl);
@@ -305,6 +447,9 @@ export default function App() {
         filename,
         normalizedUrl: data.normalizedUrl,
         postId: data.postId,
+        platform: data.platform || platform,
+        videoInfo: data.videoInfo,
+        imageInfo: data.imageInfo,
       };
 
       setActiveScreenshot(newScreenshot);
@@ -316,9 +461,11 @@ export default function App() {
         platform: data.platform || platform,
         theme,
         timestamp: new Date().toISOString(),
-        imageUrl,
+        imageUrl: imageUrl || data.videoInfo?.thumbnailUrl || data.imageInfo?.primaryImageUrl || "",
         filename,
         normalizedUrl: data.normalizedUrl,
+        videoInfo: data.videoInfo,
+        imageInfo: data.imageInfo,
       };
 
       const updatedHistory = [historyItem, ...history.filter((h) => h.url !== url.trim())].slice(0, 6);
@@ -341,6 +488,7 @@ export default function App() {
       filename: item.filename,
       normalizedUrl: item.normalizedUrl,
       postId: item.filename.replace(`${item.platform}-post-`, "").replace(".png", ""),
+      videoInfo: item.videoInfo,
     });
     setError(null);
     setCopyStatus("idle");
@@ -577,10 +725,16 @@ export default function App() {
                         ? "여기에 소셜 미디어 링크를 붙여넣으세요 (자동 감지)"
                         : platform === "x"
                         ? "https://x.com/username/status/1234567890"
+                        : platform === "x_video"
+                        ? "https://x.com/username/status/1234567890 (X 동영상)"
                         : platform === "youtube"
                         ? "https://www.youtube.com/post/Ugkx..."
                         : platform === "youtube_thumb"
                         ? "https://www.youtube.com/watch?v=dtp6b76pMak"
+                        : platform === "telegram_video"
+                        ? "https://t.me/telegram/220 (Telegram 동영상)"
+                        : platform === "telegram_image"
+                        ? "https://t.me/telegram/200 (Telegram 이미지)"
                         : "https://telegram.me/s/channel/123 (또는 telegram.me/channel/123)"
                     }
                     className="w-full bg-slate-50 border border-slate-200 text-slate-900 placeholder-slate-400 rounded-xl py-3 pl-4 pr-10 text-sm focus:outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-500/15 transition-all font-mono"
@@ -590,10 +744,11 @@ export default function App() {
                     {(() => {
                       const det = detectPlatform(url);
                       const current = platform === "auto" ? det : platform;
-                      if (current === "x") return <Twitter className="w-4 h-4 text-sky-500" />;
+                      if (current === "x" || current === "x_video") return <Twitter className="w-4 h-4 text-sky-500" />;
                       if (current === "youtube") return <Youtube className="w-4 h-4 text-rose-500" />;
                       if (current === "youtube_thumb") return <Image className="w-4 h-4 text-red-500" />;
-                      if (current === "telegram") return <Send className="w-4 h-4 text-cyan-500" />;
+                      if (current === "telegram" || current === "telegram_video") return <Send className="w-4 h-4 text-cyan-500" />;
+                      if (current === "telegram_image") return <Image className="w-4 h-4 text-emerald-500" />;
                       return <Sparkles className="w-4 h-4 text-violet-500 animate-pulse" />;
                     })()}
                   </div>
@@ -605,15 +760,50 @@ export default function App() {
                   const det = detectPlatform(url);
                   if (!det) return null;
                   return (
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-violet-600 bg-violet-50/50 border border-violet-100 rounded-lg px-3 py-2 w-fit mt-1.5 animate-fade-in">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>플랫폼 감지 결과:</span>
-                      <span className="font-bold underline decoration-violet-300">
-                        {det === "x" && "X (Twitter)"}
-                        {det === "youtube" && "YouTube 커뮤니티 포스트"}
-                        {det === "youtube_thumb" && "YouTube 비디오 썸네일"}
-                        {det === "telegram" && "Telegram 포스트"}
-                      </span>
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-violet-700 bg-violet-50/80 border border-violet-200/80 rounded-xl px-3 py-2 w-fit mt-1.5 animate-fade-in shadow-xs">
+                      <div className="flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-violet-500" />
+                        <span>플랫폼 감지 결과:</span>
+                        <span className="font-bold underline decoration-violet-300">
+                          {det === "x" && "X (Twitter)"}
+                          {det === "youtube" && "YouTube 커뮤니티 포스트"}
+                          {det === "youtube_thumb" && "YouTube 비디오 썸네일"}
+                          {det === "telegram" && "Telegram 포스트"}
+                        </span>
+                      </div>
+                      {det === "x" && (
+                        <button
+                          type="button"
+                          id="quick-x-video-btn"
+                          onClick={() => setPlatform("x_video")}
+                          className="flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-100/70 hover:bg-indigo-100 border border-indigo-200 rounded-lg px-2.5 py-1 transition-all cursor-pointer shadow-2xs"
+                        >
+                          <Video className="w-3 h-3 text-indigo-600" />
+                          <span>🎬 X 동영상만 추출하기 ➔</span>
+                        </button>
+                      )}
+                      {det === "telegram" && (
+                        <>
+                          <button
+                            type="button"
+                            id="quick-telegram-video-btn"
+                            onClick={() => setPlatform("telegram_video")}
+                            className="flex items-center gap-1 text-[11px] font-bold text-teal-700 hover:text-teal-900 bg-teal-100/70 hover:bg-teal-100 border border-teal-300 rounded-lg px-2.5 py-1 transition-all cursor-pointer shadow-2xs"
+                          >
+                            <Video className="w-3 h-3 text-teal-600" />
+                            <span>🎬 TG 동영상 추출 ➔</span>
+                          </button>
+                          <button
+                            type="button"
+                            id="quick-telegram-image-btn"
+                            onClick={() => setPlatform("telegram_image")}
+                            className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-100/70 hover:bg-emerald-100 border border-emerald-300 rounded-lg px-2.5 py-1 transition-all cursor-pointer shadow-2xs"
+                          >
+                            <Image className="w-3 h-3 text-emerald-600" />
+                            <span>🖼️ TG 이미지 추출 ➔</span>
+                          </button>
+                        </>
+                      )}
                     </div>
                   );
                 })()}
@@ -804,24 +994,328 @@ export default function App() {
                 </div>
               )}
 
-              {/* SCENARIO C: Active Screenshot Loaded State */}
+              {/* SCENARIO C: Active Screenshot or Video Loaded State */}
               {!isLoading && activeScreenshot && (
-                <div className="w-full h-full flex flex-col justify-center items-center" id="preview-result-state">
-                  {/* Backdrop Gradient wrapper mimicking custom design container */}
-                  <div
-                    className={`w-full max-w-lg rounded-2xl p-6 sm:p-10 transition-all duration-500 shadow-2xl flex items-center justify-center ${activeGradientClass}`}
-                    id="gradient-backdrop-canvas"
-                  >
-                    {/* Rounded image card reflecting final asset */}
-                    <div className="relative group rounded-xl select-all overflow-hidden flex items-center justify-center">
-                      <img
-                        src={activeScreenshot.imageUrl}
-                        alt="SNS Screenshot asset"
-                        className="max-h-[280px] sm:max-h-[340px] lg:max-h-[380px] w-auto h-auto block select-all cursor-zoom-in object-contain rounded-xl shadow-2xl border border-slate-200"
-                        referrerPolicy="no-referrer"
-                      />
+                <div className="w-full h-full flex flex-col justify-center items-center py-2" id="preview-result-state">
+                  {activeScreenshot.imageInfo ? (
+                    /* Image Extraction Display (Telegram Images) */
+                    <div className="w-full max-w-xl bg-slate-950 rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-2xl space-y-4 animate-fade-in">
+                      <div className="flex flex-wrap items-center justify-between border-b border-slate-800/80 pb-3 gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                          <span className="text-xs font-bold text-white tracking-wide">
+                            🖼️ 텔레그램 첨부 이미지 추출 완료 ({activeScreenshot.imageInfo.imageUrls.length}개)
+                          </span>
+                        </div>
+                        {/* Tab Switcher: Extracted Images Gallery vs Post Card View */}
+                        <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-0.5 rounded-lg text-[11px]">
+                          <button
+                            type="button"
+                            onClick={() => setImageDisplayMode("gallery")}
+                            className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                              imageDisplayMode === "gallery"
+                                ? "bg-emerald-600 text-white shadow-xs"
+                                : "text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            <Image className="w-3 h-3" />
+                            <span>추출 이미지 갤러리</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setImageDisplayMode("card")}
+                            className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                              imageDisplayMode === "card"
+                                ? "bg-cyan-600 text-white shadow-xs"
+                                : "text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            <Camera className="w-3 h-3" />
+                            <span>포스트 카드 캡처</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Mode A: Extracted Images Gallery */}
+                      {imageDisplayMode === "gallery" && (
+                        <div className="space-y-4">
+                          <div className={`grid gap-3 ${activeScreenshot.imageInfo.imageUrls.length > 1 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"}`}>
+                            {activeScreenshot.imageInfo.imageUrls.map((imgUrl, idx) => (
+                              <div
+                                key={idx}
+                                className="bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden p-2.5 space-y-2 flex flex-col justify-between shadow-lg group"
+                              >
+                                <div className="relative rounded-lg overflow-hidden bg-black aspect-auto min-h-[160px] max-h-[300px] flex items-center justify-center">
+                                  <img
+                                    src={imgUrl}
+                                    alt={`Extracted TG image ${idx + 1}`}
+                                    className="w-full h-full object-contain rounded-md"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                  <div className="absolute top-2 left-2 bg-black/70 backdrop-blur-xs text-emerald-300 border border-emerald-500/30 text-[10px] font-mono px-2 py-0.5 rounded-md font-bold">
+                                    IMG #{idx + 1}
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-1.5 text-xs pt-1">
+                                  <a
+                                    href={`/api/download-image?url=${encodeURIComponent(imgUrl)}&filename=${encodeURIComponent(`telegram-image-${activeScreenshot.postId}-${idx + 1}.jpg`)}`}
+                                    download={`telegram-image-${activeScreenshot.postId}-${idx + 1}.jpg`}
+                                    className="py-2 px-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-[11px] flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                    <span>다운로드</span>
+                                  </a>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(imgUrl);
+                                      setImageCopyIndex(idx);
+                                      setTimeout(() => setImageCopyIndex(null), 3000);
+                                    }}
+                                    className="py-2 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-lg text-[11px] border border-slate-700 flex items-center justify-center gap-1 transition-all cursor-pointer"
+                                  >
+                                    {imageCopyIndex === idx ? (
+                                      <>
+                                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                        <span>복사됨!</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Copy className="w-3.5 h-3.5" />
+                                        <span>URL 복사</span>
+                                      </>
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Mode B: Post Card Capture */}
+                      {imageDisplayMode === "card" && activeScreenshot.imageUrl && (
+                        <div
+                          className={`w-full rounded-xl p-4 sm:p-6 transition-all duration-500 shadow-2xl flex items-center justify-center ${activeGradientClass}`}
+                          id="gradient-backdrop-canvas"
+                        >
+                          <div className="relative group rounded-xl select-all overflow-hidden flex items-center justify-center">
+                            <img
+                              src={activeScreenshot.imageUrl}
+                              alt="Telegram Post Card Screenshot"
+                              className="max-h-[300px] sm:max-h-[380px] w-auto h-auto block select-all cursor-zoom-in object-contain rounded-xl shadow-2xl border border-slate-200"
+                              referrerPolicy="no-referrer"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Author & Post Text Meta Box */}
+                      <div className="bg-slate-900/90 rounded-xl p-3.5 border border-slate-800/80 space-y-2 text-xs">
+                        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                          <div className="flex items-center gap-2">
+                            {activeScreenshot.imageInfo.authorAvatar && (
+                              <img
+                                src={activeScreenshot.imageInfo.authorAvatar}
+                                alt="Author Avatar"
+                                className="w-6 h-6 rounded-full border border-slate-700 object-cover"
+                              />
+                            )}
+                            <span className="font-bold text-slate-200">{activeScreenshot.imageInfo.authorName}</span>
+                            <span className="text-slate-400">@{activeScreenshot.imageInfo.authorHandle}</span>
+                          </div>
+                          {activeScreenshot.imageInfo.views ? (
+                            <span className="text-slate-400 font-mono text-[11px]">
+                              👁️ {activeScreenshot.imageInfo.views.toLocaleString()} 회
+                            </span>
+                          ) : null}
+                        </div>
+                        {activeScreenshot.imageInfo.tweetText && (
+                          <p className="text-slate-300 leading-relaxed text-xs pt-1 select-all">
+                            {activeScreenshot.imageInfo.tweetText}
+                          </p>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  ) : activeScreenshot.videoInfo ? (
+                    /* Video Extraction Display */
+                    <div className="w-full max-w-xl bg-slate-950 rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-2xl space-y-4 animate-fade-in">
+                      <div className="flex flex-wrap items-center justify-between border-b border-slate-800/80 pb-3 gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2.5 h-2.5 rounded-full bg-pink-500 animate-pulse" />
+                          <span className="text-xs font-bold text-white tracking-wide">🎬 동영상 미디어 추출 완료</span>
+                        </div>
+                        {/* Tab Switcher: GIF Canvas vs MP4 Player */}
+                        <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-0.5 rounded-lg text-[11px]">
+                          <button
+                            type="button"
+                            onClick={() => setVideoDisplayMode("gif")}
+                            className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                              videoDisplayMode === "gif"
+                                ? "bg-pink-600 text-white shadow-xs"
+                                : "text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            <Film className="w-3 h-3" />
+                            <span>Animated GIF</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setVideoDisplayMode("player")}
+                            className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                              videoDisplayMode === "player"
+                                ? "bg-indigo-600 text-white shadow-xs"
+                                : "text-slate-400 hover:text-slate-200"
+                            }`}
+                          >
+                            <Video className="w-3 h-3" />
+                            <span>비디오 플레이어</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Display Mode A: Animated GIF Canvas Preview */}
+                      {videoDisplayMode === "gif" && (
+                        <div className="space-y-3">
+                          {gifConverting ? (
+                            <div className="aspect-video w-full rounded-xl bg-slate-900 border border-slate-800 flex flex-col items-center justify-center p-6 text-center space-y-3 shadow-inner">
+                              <div className="w-12 h-12 rounded-full border-3 border-pink-500/20 border-t-pink-500 animate-spin flex items-center justify-center">
+                                <Film className="w-5 h-5 text-pink-400" />
+                              </div>
+                              <div>
+                                <h5 className="text-sm font-bold text-slate-100">🎬 Animated GIF 생성 중...</h5>
+                                <p className="text-xs text-slate-400 mt-1">
+                                  {gifDuration === "full" ? "전체 재생 길이 (Full)" : `${gifDuration}초 구간`} • {gifScale}p 해상도 • {gifFps} FPS (고품질 랜초스 필터)
+                                </p>
+                              </div>
+                            </div>
+                          ) : gifResult ? (
+                            <div className="space-y-3">
+                              <div className="relative rounded-xl overflow-hidden bg-black border border-pink-500/40 flex items-center justify-center shadow-2xl group select-all min-h-[220px]">
+                                <img
+                                  src={gifResult.gifUrl || gifResult.gifDataUrl}
+                                  alt="Animated GIF Preview"
+                                  className="max-h-[320px] w-auto h-auto object-contain rounded-lg"
+                                />
+                                <div className="absolute top-2.5 right-2.5 bg-black/80 backdrop-blur-xs text-pink-300 border border-pink-500/40 text-[10px] font-mono px-2 py-0.5 rounded-md font-bold shadow-sm">
+                                  GIF • {gifResult.sizeMb}
+                                </div>
+                              </div>
+
+                              {/* Canvas Quick Actions for GIF */}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                <button
+                                  type="button"
+                                  id="canvas-copy-gif-btn"
+                                  onClick={handleCopyGifToClipboard}
+                                  className={`py-2.5 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md ${
+                                    gifCopyStatus === "copied"
+                                      ? "bg-emerald-600 text-white"
+                                      : "bg-pink-600 hover:bg-pink-500 text-white shadow-pink-600/20"
+                                  }`}
+                                >
+                                  {gifCopyStatus === "copied" ? (
+                                    <>
+                                      <Check className="w-4 h-4 text-emerald-200" />
+                                      <span>클립보드 복사 완료! 붙여넣기(Ctrl+V) 하세요 📋</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Copy className="w-4 h-4" />
+                                      <span>📋 클립보드에 GIF 복사 (Copy)</span>
+                                    </>
+                                  )}
+                                </button>
+
+                                <a
+                                  href={gifResult.gifUrl || gifResult.gifDataUrl}
+                                  download={gifResult.filename}
+                                  id="canvas-download-gif-btn"
+                                  className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold rounded-xl text-xs border border-slate-700 flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                                >
+                                  <Download className="w-4 h-4 text-pink-300" />
+                                  <span>📥 Animated GIF 다운로드 (.gif)</span>
+                                </a>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="aspect-video w-full rounded-xl bg-slate-900 border border-slate-800 flex flex-col items-center justify-center p-6 text-center space-y-2">
+                              <Film className="w-8 h-8 text-slate-600" />
+                              <button
+                                type="button"
+                                onClick={() => handleConvertToGif()}
+                                className="px-4 py-2 bg-pink-600 hover:bg-pink-500 text-white font-bold rounded-xl text-xs shadow-md transition-colors cursor-pointer"
+                              >
+                                🎬 Animated GIF 생성하기
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Display Mode B: Interactive HTML5 Video Player */}
+                      {videoDisplayMode === "player" && (
+                        <div className="relative rounded-xl overflow-hidden bg-black border border-slate-800/80 aspect-video flex items-center justify-center shadow-inner">
+                          <video
+                            src={`/api/stream-video?url=${encodeURIComponent(activeScreenshot.videoInfo.videoUrl)}`}
+                            poster={activeScreenshot.videoInfo.thumbnailUrl}
+                            controls
+                            autoPlay
+                            muted
+                            loop
+                            playsInline
+                            className="w-full h-full object-contain"
+                          >
+                            브라우저가 동영상 재생을 지원하지 않습니다.
+                          </video>
+                        </div>
+                      )}
+
+                      {/* Author & Tweet Meta Box */}
+                      <div className="bg-slate-900/90 rounded-xl p-3.5 border border-slate-800/80 space-y-2 text-xs">
+                        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                          <div className="flex items-center gap-2">
+                            {activeScreenshot.videoInfo.authorAvatar && (
+                              <img
+                                src={activeScreenshot.videoInfo.authorAvatar}
+                                alt="Author Avatar"
+                                className="w-6 h-6 rounded-full border border-slate-700 object-cover"
+                              />
+                            )}
+                            <span className="font-bold text-slate-200">{activeScreenshot.videoInfo.authorName}</span>
+                            <span className="text-slate-400">@{activeScreenshot.videoInfo.authorHandle}</span>
+                          </div>
+                          {activeScreenshot.videoInfo.durationFormatted && (
+                            <span className="text-slate-400 font-mono text-[11px]">
+                              ⏱️ {activeScreenshot.videoInfo.durationFormatted}
+                            </span>
+                          )}
+                        </div>
+                        {activeScreenshot.videoInfo.tweetText && (
+                          <p className="text-slate-300 leading-relaxed text-xs pt-1 select-all">
+                            {activeScreenshot.videoInfo.tweetText}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    /* Standard Image Screenshot Canvas */
+                    <div
+                      className={`w-full max-w-lg rounded-2xl p-6 sm:p-10 transition-all duration-500 shadow-2xl flex items-center justify-center ${activeGradientClass}`}
+                      id="gradient-backdrop-canvas"
+                    >
+                      <div className="relative group rounded-xl select-all overflow-hidden flex items-center justify-center">
+                        <img
+                          src={activeScreenshot.imageUrl}
+                          alt="SNS Screenshot asset"
+                          className="max-h-[280px] sm:max-h-[340px] lg:max-h-[380px] w-auto h-auto block select-all cursor-zoom-in object-contain rounded-xl shadow-2xl border border-slate-200"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -829,54 +1323,366 @@ export default function App() {
             {/* Downward Workspace Controls & Intended Share Actions */}
             {!isLoading && activeScreenshot && (
               <div className="mt-6 pt-4 border-t border-slate-100 space-y-4 shrink-0" id="preview-actions-container">
-                {/* General Actions: Download & Copy to Clipboard */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <a
-                    href={activeScreenshot.imageUrl}
-                    download={activeScreenshot.filename}
-                    onClick={handleDownload}
-                    id="download-clean-png-btn"
-                    className="flex items-center justify-center gap-2 py-3 px-4 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/15 text-xs tracking-wide transition-all cursor-pointer"
-                  >
-                    <Download className="w-4 h-4" />
-                    📥 이미지 저장 (Download Clean PNG)
-                  </a>
+                {activeScreenshot.imageInfo ? (
+                  /* Image Action Controls */
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <a
+                        href={`/api/download-image?url=${encodeURIComponent(activeScreenshot.imageInfo.primaryImageUrl)}&filename=${encodeURIComponent(`telegram-image-${activeScreenshot.postId}.jpg`)}`}
+                        download={`telegram-image-${activeScreenshot.postId}.jpg`}
+                        id="download-primary-image-btn"
+                        className="flex items-center justify-center gap-2 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/20 text-xs tracking-wide transition-all cursor-pointer"
+                      >
+                        <Download className="w-4 h-4" />
+                        🖼️ 메인 이미지 (HD) 고화질 다운로드
+                      </a>
 
-                  <button
-                    id="copy-to-clipboard-btn"
-                    onClick={handleCopyToClipboard}
-                    disabled={copyStatus === "loading"}
-                    className={`flex items-center justify-center gap-2 py-3 px-4 text-white font-bold rounded-xl shadow-md text-xs tracking-wide transition-all cursor-pointer ${
-                      copyStatus === "copied"
-                        ? "bg-emerald-600 hover:bg-emerald-700"
-                        : copyStatus === "error"
-                        ? "bg-rose-600 hover:bg-rose-700"
-                        : "bg-slate-700 hover:bg-slate-800 shadow-slate-700/15"
-                    }`}
-                  >
-                    {copyStatus === "loading" ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        복사하는 중...
-                      </>
-                    ) : copyStatus === "copied" ? (
-                      <>
-                        <Check className="w-4 h-4" />
-                        클립보드에 복사 완료! 📋
-                      </>
-                    ) : copyStatus === "error" ? (
-                      <>
-                        <AlertCircle className="w-4 h-4" />
-                        복사 실패 (수동 저장 권장)
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-4 h-4" />
-                        📋 클립보드에 이미지 복사 (Copy)
-                      </>
+                      <button
+                        id="copy-primary-image-url-btn"
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(activeScreenshot.imageInfo!.primaryImageUrl);
+                          setCopyStatus("copied");
+                          setTimeout(() => setCopyStatus("idle"), 3000);
+                        }}
+                        className="flex items-center justify-center gap-2 py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold rounded-xl border border-slate-700 text-xs tracking-wide transition-all cursor-pointer shadow-sm"
+                      >
+                        {copyStatus === "copied" ? (
+                          <>
+                            <Check className="w-4 h-4 text-emerald-400" />
+                            이미지 직링크 복사 완료! 🔗
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4" />
+                            🔗 메인 이미지 원본 URL 직링크 복사
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                ) : activeScreenshot.videoInfo ? (
+                  /* Video Action Controls & Animated GIF Converter */
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <a
+                        href={`/api/download-video?url=${encodeURIComponent(activeScreenshot.videoInfo.videoUrl)}&filename=${encodeURIComponent(`video-${activeScreenshot.postId}.mp4`)}`}
+                        download={`video-${activeScreenshot.postId}.mp4`}
+                        id="download-video-mp4-btn"
+                        className="flex items-center justify-center gap-2 py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold rounded-xl shadow-lg shadow-indigo-600/20 text-xs tracking-wide transition-all cursor-pointer"
+                      >
+                        <Download className="w-4 h-4" />
+                        🎬 동영상 (MP4) 고화질 다운로드
+                      </a>
+
+                      <button
+                        id="copy-video-url-btn"
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(activeScreenshot.videoInfo!.videoUrl);
+                          setCopyStatus("copied");
+                          setTimeout(() => setCopyStatus("idle"), 3000);
+                        }}
+                        className="flex items-center justify-center gap-2 py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold rounded-xl border border-slate-700 text-xs tracking-wide transition-all cursor-pointer shadow-sm"
+                      >
+                        {copyStatus === "copied" ? (
+                          <>
+                            <Check className="w-4 h-4 text-emerald-400" />
+                            MP4 직링크 복사 완료! 🔗
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4" />
+                            🔗 동영상 MP4 직링크 복사
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Interactive Animated GIF Conversion Section */}
+                    <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-purple-950 border border-indigo-700/60 rounded-2xl p-4 text-white shadow-xl space-y-4">
+                      <div className="flex items-center justify-between border-b border-indigo-800/80 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <Film className="w-4 h-4 text-pink-400 animate-pulse" />
+                          <h4 className="text-xs font-bold tracking-wide text-indigo-100">✨ Animated GIF 변환 & 클립보드 바로 복사</h4>
+                        </div>
+                        <span className="text-[10px] bg-pink-500/20 text-pink-300 border border-pink-500/30 px-2 py-0.5 rounded-full font-semibold">GIF 변환기</span>
+                      </div>
+
+                      {/* GIF Controls Grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                        {/* Duration Selection */}
+                        <div>
+                          <label className="block text-[11px] font-semibold text-indigo-200 mb-1">
+                            ⏱️ 재생 길이 (구간)
+                          </label>
+                          <div className="grid grid-cols-5 gap-1">
+                            {[
+                              { label: "3초", val: 3 },
+                              { label: "5초", val: 5 },
+                              { label: "10초", val: 10 },
+                              { label: "15초", val: 15 },
+                              { label: "Full (전체)", val: "full" },
+                            ].map((opt) => (
+                              <button
+                                key={String(opt.val)}
+                                type="button"
+                                onClick={() => setGifDuration(opt.val as number | "full")}
+                                className={`py-1.5 px-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold border transition-all cursor-pointer text-center ${
+                                  gifDuration === opt.val
+                                    ? "bg-pink-600 border-pink-400 text-white shadow-xs"
+                                    : "bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700"
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Resolution / Scale Selection */}
+                        <div>
+                          <label className="block text-[11px] font-semibold text-indigo-200 mb-1">
+                            📐 해상도 (크기)
+                          </label>
+                          <div className="grid grid-cols-3 gap-1">
+                            {[
+                              { label: "360p", val: 360 },
+                              { label: "480p", val: 480 },
+                              { label: "600p", val: 600 },
+                            ].map((res) => (
+                              <button
+                                key={res.val}
+                                type="button"
+                                onClick={() => setGifScale(res.val)}
+                                className={`py-1.5 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                                  gifScale === res.val
+                                    ? "bg-indigo-600 border-indigo-400 text-white shadow-xs"
+                                    : "bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700"
+                                }`}
+                              >
+                                {res.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* FPS Selection */}
+                        <div>
+                          <label className="block text-[11px] font-semibold text-indigo-200 mb-1">
+                            🎞️ 프레임 (FPS)
+                          </label>
+                          <div className="grid grid-cols-3 gap-1">
+                            {[
+                              { label: "8 fps", val: 8 },
+                              { label: "10 fps", val: 10 },
+                              { label: "15 fps", val: 15 },
+                            ].map((f) => (
+                              <button
+                                key={f.val}
+                                type="button"
+                                onClick={() => setGifFps(f.val)}
+                                className={`py-1.5 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                                  gifFps === f.val
+                                    ? "bg-purple-600 border-purple-400 text-white shadow-xs"
+                                    : "bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700"
+                                }`}
+                              >
+                                {f.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Start Time slider */}
+                      <div className="flex items-center justify-between bg-slate-900/80 border border-slate-800 rounded-xl px-3 py-2 text-xs">
+                        <span className="text-slate-300 text-[11px]">시작 시점 (초):</span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min="0"
+                            max={Math.max(0, Math.floor((activeScreenshot.videoInfo.durationMs || 60000) / 1000) - gifDuration)}
+                            value={gifStartTime}
+                            onChange={(e) => setGifStartTime(Number(e.target.value))}
+                            className="w-28 sm:w-36 accent-pink-500 cursor-pointer"
+                          />
+                          <span className="font-mono text-pink-300 font-bold w-12 text-right">{gifStartTime}초 시작</span>
+                        </div>
+                      </div>
+
+                      {/* Convert Action Button */}
+                      <button
+                        type="button"
+                        id="convert-to-gif-btn"
+                        onClick={handleConvertToGif}
+                        disabled={gifConverting}
+                        className="w-full py-3 px-4 bg-gradient-to-r from-pink-600 via-purple-600 to-indigo-600 hover:from-pink-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-lg shadow-pink-600/20 text-xs tracking-wide transition-all cursor-pointer flex items-center justify-center gap-2"
+                      >
+                        {gifConverting ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin text-pink-200" />
+                            <span>High-Quality Animated GIF 변환 중... (약 2~3초)</span>
+                          </>
+                        ) : (
+                          <>
+                            <Film className="w-4 h-4 text-pink-200" />
+                            <span>🎬 Animated GIF 로 변환하기</span>
+                          </>
+                        )}
+                      </button>
+
+                      {/* Generated GIF Result & Copy & Paste Controls */}
+                      {gifResult && (
+                        <div className="bg-slate-950/95 border border-pink-500/50 rounded-xl p-3.5 space-y-3 animate-fade-in shadow-2xl">
+                          <div className="flex items-center justify-between text-xs border-b border-slate-800 pb-2">
+                            <span className="font-bold text-pink-300 flex items-center gap-1.5">
+                              <Check className="w-4 h-4 text-emerald-400" />
+                              Animated GIF 생성 완료!
+                            </span>
+                            <span className="bg-pink-950 text-pink-300 border border-pink-800/60 px-2 py-0.5 rounded-md font-mono text-[11px]">
+                              용량: {gifResult.sizeMb}
+                            </span>
+                          </div>
+
+                          {/* GIF Image Preview */}
+                          <div className="flex justify-center bg-black/80 rounded-lg p-2 border border-slate-800">
+                            <img
+                              src={gifResult.gifUrl || gifResult.gifDataUrl}
+                              alt="Generated Animated GIF"
+                              className="max-h-56 w-auto object-contain rounded-lg shadow-md"
+                            />
+                          </div>
+
+                          {/* Copy & Paste & Download Action Buttons */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <button
+                              type="button"
+                              id="copy-gif-btn"
+                              onClick={handleCopyGifToClipboard}
+                              className={`py-2.5 px-3 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md ${
+                                gifCopyStatus === "copied"
+                                  ? "bg-emerald-600 text-white"
+                                  : gifCopyStatus === "error"
+                                  ? "bg-rose-600 text-white"
+                                  : "bg-pink-600 hover:bg-pink-500 text-white shadow-pink-600/20"
+                              }`}
+                            >
+                              {gifCopyStatus === "copied" ? (
+                                <>
+                                  <Check className="w-4 h-4 text-emerald-200" />
+                                  <span>클립보드 복사 완료! 붙여넣기(Ctrl+V) 하세요 📋</span>
+                                </>
+                              ) : gifCopyStatus === "error" ? (
+                                <>
+                                  <AlertCircle className="w-4 h-4" />
+                                  <span>복사 실패 (수동 저장 권장)</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-4 h-4" />
+                                  <span>📋 클립보드에 GIF 복사 (Copy)</span>
+                                </>
+                              )}
+                            </button>
+
+                            <a
+                              href={gifResult.gifUrl || gifResult.gifDataUrl}
+                              download={gifResult.filename}
+                              id="download-gif-file-btn"
+                              className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold rounded-xl text-xs border border-slate-700 flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                            >
+                              <Download className="w-4 h-4 text-indigo-300" />
+                              <span>📥 Animated GIF 다운로드 (.gif)</span>
+                            </a>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Collapsible section to view & save Tweet screenshot card */}
+                    {activeScreenshot.imageUrl && (
+                      <details className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs" id="tweet-card-accordion">
+                        <summary className="font-bold text-slate-700 cursor-pointer flex items-center justify-between select-none">
+                          <span>🖼️ X 게시물 스크린샷 카드도 함께 저장하기 (PNG)</span>
+                          <span className="text-slate-400 text-[10px] bg-slate-200/60 px-2 py-0.5 rounded-full font-normal">펼치기 / 접기</span>
+                        </summary>
+                        <div className="mt-3 flex flex-col items-center gap-3 pt-3 border-t border-slate-200/80">
+                          <img
+                            src={activeScreenshot.imageUrl}
+                            alt="Tweet card preview"
+                            className="max-h-[220px] w-auto rounded-lg border border-slate-200 shadow-sm"
+                          />
+                          <div className="flex gap-2 w-full max-w-xs">
+                            <a
+                              href={activeScreenshot.imageUrl}
+                              download={activeScreenshot.filename}
+                              className="flex-1 py-2 text-center bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition-colors"
+                            >
+                              📥 카드 저장 (PNG)
+                            </a>
+                            <button
+                              type="button"
+                              onClick={handleCopyToClipboard}
+                              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-lg text-xs transition-colors"
+                            >
+                              📋 클립보드 복사
+                            </button>
+                          </div>
+                        </div>
+                      </details>
                     )}
-                  </button>
-                </div>
+                  </div>
+                ) : (
+                  /* Standard Image Screenshot Actions */
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <a
+                      href={activeScreenshot.imageUrl}
+                      download={activeScreenshot.filename}
+                      onClick={handleDownload}
+                      id="download-clean-png-btn"
+                      className="flex items-center justify-center gap-2 py-3 px-4 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/15 text-xs tracking-wide transition-all cursor-pointer"
+                    >
+                      <Download className="w-4 h-4" />
+                      📥 이미지 저장 (Download Clean PNG)
+                    </a>
+
+                    <button
+                      id="copy-to-clipboard-btn"
+                      onClick={handleCopyToClipboard}
+                      disabled={copyStatus === "loading"}
+                      className={`flex items-center justify-center gap-2 py-3 px-4 text-white font-bold rounded-xl shadow-md text-xs tracking-wide transition-all cursor-pointer ${
+                        copyStatus === "copied"
+                          ? "bg-emerald-600 hover:bg-emerald-700"
+                          : copyStatus === "error"
+                          ? "bg-rose-600 hover:bg-rose-700"
+                          : "bg-slate-700 hover:bg-slate-800 shadow-slate-700/15"
+                      }`}
+                    >
+                      {copyStatus === "loading" ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          복사하는 중...
+                        </>
+                      ) : copyStatus === "copied" ? (
+                        <>
+                          <Check className="w-4 h-4" />
+                          클립보드에 복사 완료! 📋
+                        </>
+                      ) : copyStatus === "error" ? (
+                        <>
+                          <AlertCircle className="w-4 h-4" />
+                          복사 실패 (수동 저장 권장)
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-4 h-4" />
+                          📋 클립보드에 이미지 복사 (Copy)
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
 
                 {/* X Integration Sharing Intensifiers */}
                 <div className="bg-slate-50 border border-slate-150 rounded-2xl p-4.5 space-y-3" id="x-share-intents-box">

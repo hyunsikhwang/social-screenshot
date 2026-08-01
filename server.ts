@@ -1,6 +1,20 @@
 import path from "path";
 import fs from "fs";
 import { execSync } from "child_process";
+import ffmpegStatic from "ffmpeg-static";
+
+const getFfmpegBin = (): string => {
+  if (ffmpegStatic && fs.existsSync(ffmpegStatic)) {
+    return ffmpegStatic;
+  }
+  if (fs.existsSync("/usr/bin/ffmpeg")) {
+    return "/usr/bin/ffmpeg";
+  }
+  if (fs.existsSync("/usr/local/bin/ffmpeg")) {
+    return "/usr/local/bin/ffmpeg";
+  }
+  return "ffmpeg";
+};
 
 // Resolve and configure the path for Playwright browsers.
 const projectRoot = process.cwd();
@@ -2450,6 +2464,663 @@ async function startServer() {
     res.send(htmlContent);
   });
 
+  // Helper to extract video media from X post
+  async function extractXVideoMedia(
+    postUrl: string,
+    theme: "light" | "dark" = "light"
+  ) {
+    const normalizedUrl = normalizeXPostUrl(postUrl);
+    if (!normalizedUrl) {
+      throw new Error("올바른 X(트위터) 게시물 URL 형식이 아닙니다.");
+    }
+
+    const postId = extractXPostId(postUrl);
+    if (!postId) {
+      throw new Error("X 게시물 ID를 추출할 수 없습니다.");
+    }
+
+    let videoData: any = null;
+
+    // 1. Try api.vxtwitter.com
+    try {
+      const vxRes = await fetch(`https://api.vxtwitter.com/Twitter/status/${postId}`, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+      });
+      if (vxRes.ok) {
+        const data = await vxRes.json() as any;
+        if (data && data.media_extended && Array.isArray(data.media_extended)) {
+          const videoMedia = data.media_extended.find((m: any) => m.type === "video" || m.type === "animated_gif");
+          if (videoMedia && videoMedia.url) {
+            videoData = {
+              videoUrl: videoMedia.url,
+              thumbnailUrl: videoMedia.thumbnail_url || data.mediaURLs?.[0] || "",
+              durationMs: videoMedia.duration_millis || 0,
+              width: videoMedia.size?.width,
+              height: videoMedia.size?.height,
+              tweetText: data.text || "",
+              authorName: data.user_name || "X User",
+              authorHandle: data.user_screen_name || "i",
+              authorAvatar: data.user_profile_image_url || "",
+              likes: data.likes || 0,
+              retweets: data.retweets || 0,
+              replies: data.replies || 0,
+            };
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[extractXVideoMedia] vxtwitter fetch failed:", e);
+    }
+
+    // 2. Fallback to api.fxtwitter.com
+    if (!videoData) {
+      try {
+        const fxRes = await fetch(`https://api.fxtwitter.com/status/${postId}`, {
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+        });
+        if (fxRes.ok) {
+          const fxJson = await fxRes.json() as any;
+          const tweet = fxJson?.tweet;
+          if (tweet && tweet.media?.videos && tweet.media.videos.length > 0) {
+            const vid = tweet.media.videos[0];
+            videoData = {
+              videoUrl: vid.url,
+              thumbnailUrl: vid.thumbnail_url || "",
+              durationMs: (vid.duration || 0) * 1000,
+              width: vid.width,
+              height: vid.height,
+              tweetText: tweet.text || "",
+              authorName: tweet.author?.name || "X User",
+              authorHandle: tweet.author?.screen_name || "i",
+              authorAvatar: tweet.author?.avatar_url || "",
+              likes: tweet.likes || 0,
+              retweets: tweet.retweets || 0,
+              replies: tweet.replies || 0,
+            };
+          }
+        }
+      } catch (e) {
+        console.warn("[extractXVideoMedia] fxtwitter fetch failed:", e);
+      }
+    }
+
+    if (!videoData || !videoData.videoUrl) {
+      throw new Error("해당 X 게시글에서 동영상 미디어를 추출할 수 없습니다. 동영상이 포함된 X 게시글 링크인지 확인해주세요.");
+    }
+
+    // Format duration
+    let durationFormatted = "";
+    if (videoData.durationMs) {
+      const totalSecs = Math.floor(videoData.durationMs / 1000);
+      const mins = Math.floor(totalSecs / 60);
+      const secs = totalSecs % 60;
+      durationFormatted = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    }
+
+    // Format resolution
+    let resolution = "";
+    if (videoData.width && videoData.height) {
+      resolution = `${videoData.width} x ${videoData.height}`;
+      if (videoData.width >= 3840 || videoData.height >= 2160) {
+        resolution += " (4K UHD)";
+      } else if (videoData.width >= 1920 || videoData.height >= 1080) {
+        resolution += " (Full HD)";
+      } else if (videoData.width >= 1280 || videoData.height >= 720) {
+        resolution += " (HD)";
+      }
+    }
+
+    const finalVideoInfo = {
+      ...videoData,
+      durationFormatted,
+      resolution,
+    };
+
+    // Capture screenshot of post for card view
+    let screenshotBuffer: Buffer;
+    try {
+      screenshotBuffer = await captureXPost(normalizedUrl, theme);
+    } catch (e) {
+      console.warn("captureXPost failed for video post:", e);
+      screenshotBuffer = Buffer.from("");
+    }
+
+    return { videoInfo: finalVideoInfo, screenshotBuffer, normalizedUrl, postId };
+  }
+
+  // Telegram Video Extraction Helper
+  function parseTelegramUrl(postUrl: string) {
+    const match = postUrl.match(/(?:t\.me|telegram\.me|telegram\.dog)\/(?:s\/)?([a-zA-Z0-9_]+)\/(\d+)/i);
+    if (!match) return null;
+    return { channel: match[1], postId: match[2] };
+  }
+
+  async function extractTelegramVideoMedia(
+    postUrl: string,
+    theme: "light" | "dark" = "light"
+  ) {
+    const parsed = parseTelegramUrl(postUrl);
+    if (!parsed) {
+      throw new Error("올바른 텔레그램 게시물 URL 형식이 아닙니다. (예: https://t.me/channel/123)");
+    }
+
+    const { channel, postId } = parsed;
+    const embedUrl = `https://t.me/${channel}/${postId}?embed=1`;
+    const normalizedUrl = `https://t.me/${channel}/${postId}`;
+
+    let videoData: any = null;
+
+    try {
+      const res = await fetch(embedUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+      });
+
+      if (res.ok) {
+        const html = await res.text();
+
+        // 1. Extract Video Source
+        let videoUrl = "";
+        const videoSrcMatch = html.match(/<video[^>]*src=["']([^"']+)["']/i) ||
+                              html.match(/<source[^>]*src=["']([^"']+)["']/i) ||
+                              html.match(/tgme_widget_message_video_player[\s\S]*?src=["']([^"']+)["']/i);
+        
+        if (videoSrcMatch) {
+          videoUrl = videoSrcMatch[1];
+        } else {
+          // Fallback: Check https://t.me/s/channel/postId
+          const sUrl = `https://t.me/s/${channel}/${postId}`;
+          const sRes = await fetch(sUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            },
+          });
+          if (sRes.ok) {
+            const sHtml = await sRes.text();
+            const sVideoMatch = sHtml.match(/<video[^>]*src=["']([^"']+)["']/i) || sHtml.match(/<source[^>]*src=["']([^"']+)["']/i);
+            if (sVideoMatch) {
+              videoUrl = sVideoMatch[1];
+            }
+          }
+        }
+
+        if (videoUrl) {
+          if (videoUrl.startsWith("//")) videoUrl = "https:" + videoUrl;
+
+          // Thumbnail
+          let thumbnailUrl = "";
+          const thumbMatch = html.match(/tgme_widget_message_video_thumb[^>]*style=["'][^"']*background-image:\s*url\((?:["'])?([^"'\)]+)(?:["'])?\)/i) ||
+                             html.match(/background-image:\s*url\((?:["'])?([^"'\)]+)(?:["'])?\)/i);
+          if (thumbMatch) {
+            thumbnailUrl = thumbMatch[1];
+            if (thumbnailUrl.startsWith("//")) thumbnailUrl = "https:" + thumbnailUrl;
+          }
+
+          // Post Text
+          let tweetText = "";
+          const textMatch = html.match(/<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+          if (textMatch) {
+            tweetText = textMatch[1].replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").trim();
+          }
+
+          // Author
+          let authorName = channel;
+          const authorMatch = html.match(/<div class="tgme_widget_message_author_name"[^>]*>([\s\S]*?)<\/div>/i) ||
+                              html.match(/<span class="tgme_widget_message_owner_name"[^>]*>([\s\S]*?)<\/span>/i);
+          if (authorMatch) {
+            authorName = authorMatch[1].replace(/<[^>]+>/g, "").trim() || channel;
+          }
+
+          let authorAvatar = "";
+          const avatarImgMatch = html.match(/<img class="tgme_widget_message_user_photo"[^>]+src=["']([^"']+)["']/i);
+          const avatarStyleMatch = html.match(/class="tgme_widget_message_user_photo[^"]*"[^>]*style=["'][^"']*background-image:\s*url\((?:["'])?([^"'\)]+)(?:["'])?\)/i);
+          if (avatarImgMatch) {
+            authorAvatar = avatarImgMatch[1];
+          } else if (avatarStyleMatch) {
+            authorAvatar = avatarStyleMatch[1];
+          }
+
+          let views = 0;
+          const viewsMatch = html.match(/<span class="tgme_widget_message_views"[^>]*>([^<]+)<\/span>/i);
+          if (viewsMatch) {
+            const vStr = viewsMatch[1].trim().toUpperCase();
+            if (vStr.endsWith("K")) views = Math.round(parseFloat(vStr) * 1000);
+            else if (vStr.endsWith("M")) views = Math.round(parseFloat(vStr) * 1000000);
+            else views = parseInt(vStr.replace(/,/g, ""), 10) || 0;
+          }
+
+          videoData = {
+            videoUrl,
+            thumbnailUrl,
+            tweetText,
+            authorName,
+            authorHandle: channel,
+            authorAvatar,
+            views,
+          };
+        }
+      }
+    } catch (e) {
+      console.warn("[extractTelegramVideoMedia] fetch failed:", e);
+    }
+
+    if (!videoData || !videoData.videoUrl) {
+      throw new Error("해당 텔레그램 게시글에서 동영상 미디어를 추출할 수 없습니다. 동영상이 포함된 텔레그램 게시글 링크인지 확인해주세요.");
+    }
+
+    const finalVideoInfo = {
+      ...videoData,
+    };
+
+    // Capture screenshot of post for card view
+    let screenshotBuffer: Buffer;
+    try {
+      screenshotBuffer = await captureTelegramPost(embedUrl, theme);
+    } catch (e) {
+      console.warn("captureTelegramPost failed for video post:", e);
+      screenshotBuffer = Buffer.from("");
+    }
+
+    return { videoInfo: finalVideoInfo, screenshotBuffer, normalizedUrl, postId: `${channel}_${postId}` };
+  }
+
+  // Telegram Image Extraction Helper
+  async function extractTelegramImageMedia(
+    postUrl: string,
+    theme: "light" | "dark" = "light"
+  ) {
+    const parsed = parseTelegramUrl(postUrl);
+    if (!parsed) {
+      throw new Error("올바른 텔레그램 게시물 URL 형식이 아닙니다. (예: https://t.me/channel/123)");
+    }
+
+    const { channel, postId } = parsed;
+    const embedUrl = `https://t.me/${channel}/${postId}?embed=1`;
+    const normalizedUrl = `https://t.me/${channel}/${postId}`;
+
+    let imageData: any = null;
+
+    try {
+      const res = await fetch(embedUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+      });
+
+      if (res.ok) {
+        const html = await res.text();
+
+        // 1. Extract Images
+        const imageUrls: string[] = [];
+        const bgMatches = [...html.matchAll(/background-image:\s*url\((?:["'])?([^"'\)]+)(?:["'])?\)/gi)];
+
+        for (const m of bgMatches) {
+          let imgUrl = m[1];
+          if (imgUrl.startsWith("//")) imgUrl = "https:" + imgUrl;
+
+          // Ignore emojis, user avatars, system icons
+          if (
+            imgUrl.includes("/emoji/") ||
+            imgUrl.includes("user_photo") ||
+            imgUrl.includes("icon-") ||
+            imgUrl.includes("telegram.org/img/")
+          ) {
+            continue;
+          }
+
+          if (!imageUrls.includes(imgUrl)) {
+            imageUrls.push(imgUrl);
+          }
+        }
+
+        // Fallback: Check t.me/s/channel/postId
+        if (imageUrls.length === 0) {
+          const sUrl = `https://t.me/s/${channel}/${postId}`;
+          const sRes = await fetch(sUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            },
+          });
+          if (sRes.ok) {
+            const sHtml = await sRes.text();
+            const sBgMatches = [...sHtml.matchAll(/background-image:\s*url\((?:["'])?([^"'\)]+)(?:["'])?\)/gi)];
+            for (const m of sBgMatches) {
+              let imgUrl = m[1];
+              if (imgUrl.startsWith("//")) imgUrl = "https:" + imgUrl;
+              if (
+                imgUrl.includes("/emoji/") ||
+                imgUrl.includes("user_photo") ||
+                imgUrl.includes("icon-") ||
+                imgUrl.includes("telegram.org/img/")
+              ) {
+                continue;
+              }
+              if (!imageUrls.includes(imgUrl)) {
+                imageUrls.push(imgUrl);
+              }
+            }
+          }
+        }
+
+        if (imageUrls.length > 0) {
+          // Post Text
+          let tweetText = "";
+          const textMatch = html.match(/<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+          if (textMatch) {
+            tweetText = textMatch[1].replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").trim();
+          }
+
+          // Author
+          let authorName = channel;
+          const authorMatch = html.match(/<div class="tgme_widget_message_author_name"[^>]*>([\s\S]*?)<\/div>/i) ||
+                              html.match(/<span class="tgme_widget_message_owner_name"[^>]*>([\s\S]*?)<\/span>/i);
+          if (authorMatch) {
+            authorName = authorMatch[1].replace(/<[^>]+>/g, "").trim() || channel;
+          }
+
+          let authorAvatar = "";
+          const avatarImgMatch = html.match(/<img class="tgme_widget_message_user_photo"[^>]+src=["']([^"']+)["']/i);
+          const avatarStyleMatch = html.match(/class="tgme_widget_message_user_photo[^"]*"[^>]*style=["'][^"']*background-image:\s*url\((?:["'])?([^"'\)]+)(?:["'])?\)/i);
+          if (avatarImgMatch) {
+            authorAvatar = avatarImgMatch[1];
+          } else if (avatarStyleMatch) {
+            authorAvatar = avatarStyleMatch[1];
+          }
+
+          let views = 0;
+          const viewsMatch = html.match(/<span class="tgme_widget_message_views"[^>]*>([^<]+)<\/span>/i);
+          if (viewsMatch) {
+            const vStr = viewsMatch[1].trim().toUpperCase();
+            if (vStr.endsWith("K")) views = Math.round(parseFloat(vStr) * 1000);
+            else if (vStr.endsWith("M")) views = Math.round(parseFloat(vStr) * 1000000);
+            else views = parseInt(vStr.replace(/,/g, ""), 10) || 0;
+          }
+
+          imageData = {
+            imageUrls,
+            primaryImageUrl: imageUrls[0],
+            tweetText,
+            authorName,
+            authorHandle: channel,
+            authorAvatar,
+            views,
+          };
+        }
+      }
+    } catch (e) {
+      console.warn("[extractTelegramImageMedia] fetch failed:", e);
+    }
+
+    if (!imageData || !imageData.imageUrls || imageData.imageUrls.length === 0) {
+      throw new Error("해당 텔레그램 게시글에서 첨부 이미지를 추출할 수 없습니다. 이미지가 포함된 텔레그램 게시글 링크인지 확인해주세요.");
+    }
+
+    // Capture screenshot of post for card view
+    let screenshotBuffer: Buffer;
+    try {
+      screenshotBuffer = await captureTelegramPost(embedUrl, theme);
+    } catch (e) {
+      console.warn("captureTelegramPost failed for image post:", e);
+      screenshotBuffer = Buffer.from("");
+    }
+
+    return { imageInfo: imageData, screenshotBuffer, normalizedUrl, postId: `${channel}_${postId}` };
+  }
+
+  // Animated GIF Conversion Endpoint using pre-downloaded video & native ffmpeg
+  app.post("/api/convert-to-gif", async (req, res) => {
+    const { videoUrl, startTime = 0, duration = 5, scale = 480, fps = 10 } = req.body;
+
+    if (!videoUrl) {
+      return res.status(400).json({ error: "videoUrl은 필수 항목입니다." });
+    }
+
+    const isFullDuration = duration === "full" || duration === "all" || duration === 0 || duration === "0";
+    const clampedStart = Math.max(0, Number(startTime) || 0);
+    const clampedDuration = isFullDuration ? 0 : Math.min(60, Math.max(1, Number(duration) || 5)); // 1 ~ 60 secs max
+    const clampedScale = Math.min(800, Math.max(240, Number(scale) || 480));
+    const clampedFps = Math.min(20, Math.max(5, Number(fps) || 10));
+
+    const tmpInput = path.join("/tmp", `x_vid_in_${Date.now()}_${Math.random().toString(36).substring(7)}.mp4`);
+    const tmpOutput = path.join("/tmp", `x_vid_out_${Date.now()}_${Math.random().toString(36).substring(7)}.gif`);
+
+    try {
+      // 1. Download video stream directly to file with zero V8 heap overhead
+      console.log(`[GIF Conversion] Downloading video stream from: ${videoUrl}`);
+      const vidRes = await fetch(videoUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Referer": "https://x.com/",
+        },
+      });
+
+      if (!vidRes.ok) {
+        throw new Error(`동영상 파일 다운로드 실패 (HTTP ${vidRes.status})`);
+      }
+
+      if (!vidRes.body) {
+        throw new Error("동영상 데이터 스트림을 수신하지 못했습니다.");
+      }
+
+      const fileStream = fs.createWriteStream(tmpInput);
+      const { Readable } = await import("stream");
+      const nodeStream = Readable.fromWeb(vidRes.body as any);
+
+      await new Promise<void>((resolve, reject) => {
+        nodeStream.pipe(fileStream);
+        nodeStream.on("error", (e) => reject(new Error(`스트림 수신 오류: ${e.message}`)));
+        fileStream.on("finish", () => resolve());
+        fileStream.on("error", (e) => reject(new Error(`파일 저장 오류: ${e.message}`)));
+      });
+
+      const inputStat = fs.statSync(tmpInput);
+      if (!inputStat || inputStat.size === 0) {
+        throw new Error("다운로드한 동영상 파일 크기가 0 bytes 입니다.");
+      }
+      console.log(`[GIF Conversion] Video downloaded successfully (${(inputStat.size / (1024 * 1024)).toFixed(2)} MB)`);
+
+      // 2. Locate ffmpeg binary safely using static/installed binary
+      const { spawn } = await import("child_process");
+      const ffmpegBin = getFfmpegBin();
+
+      const ffmpegArgs = [
+        "-y",
+        "-ss", String(clampedStart),
+        ...(isFullDuration ? [] : ["-t", String(clampedDuration)]),
+        "-i", tmpInput,
+        "-vf", `fps=${clampedFps},scale=${clampedScale}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse`,
+        tmpOutput
+      ];
+
+      console.log(`[GIF Conversion] Executing ${ffmpegBin} with args:`, ffmpegArgs.join(" "));
+
+      await new Promise<void>((resolve, reject) => {
+        const ff = spawn(ffmpegBin, ffmpegArgs);
+        let errLog = "";
+
+        ff.stderr.on("data", (d) => {
+          errLog += d.toString();
+        });
+
+        ff.on("close", (code) => {
+          if (code === 0 && fs.existsSync(tmpOutput)) {
+            resolve();
+          } else {
+            reject(new Error(`ffmpeg 변환 실패 (code ${code}): ${errLog.slice(-300)}`));
+          }
+        });
+
+        ff.on("error", (e) => reject(e));
+      });
+
+      const gifBuffer = fs.readFileSync(tmpOutput);
+      const gifFileId = `x_gif_${Date.now()}_${Math.random().toString(36).substring(7)}.gif`;
+      const storeDir = path.join("/tmp", "gif_store");
+      fs.mkdirSync(storeDir, { recursive: true });
+      fs.writeFileSync(path.join(storeDir, gifFileId), gifBuffer);
+
+      // Clean up temporary processing files
+      if (fs.existsSync(tmpInput)) fs.unlink(tmpInput, () => {});
+      if (fs.existsSync(tmpOutput)) fs.unlink(tmpOutput, () => {});
+
+      const sizeInMb = (gifBuffer.length / (1024 * 1024)).toFixed(2);
+      const gifUrlPath = `/api/get-gif/${gifFileId}`;
+      const base64Gif = gifBuffer.length < 15 * 1024 * 1024
+        ? `data:image/gif;base64,${gifBuffer.toString("base64")}`
+        : gifUrlPath;
+
+      res.json({
+        success: true,
+        gifUrl: gifUrlPath,
+        gifDataUrl: base64Gif,
+        filename: `x-video-${Date.now()}.gif`,
+        sizeMb: `${sizeInMb} MB`,
+        sizeBytes: gifBuffer.length,
+        durationSec: clampedDuration,
+        scale: clampedScale,
+        fps: clampedFps
+      });
+    } catch (e: any) {
+      console.error("[GIF Conversion Error]", e);
+      if (fs.existsSync(tmpInput)) fs.unlink(tmpInput, () => {});
+      if (fs.existsSync(tmpOutput)) fs.unlink(tmpOutput, () => {});
+
+      res.status(500).json({
+        success: false,
+        error: e.message || "Animated GIF 변환 중 오류가 발생했습니다."
+      });
+    }
+  });
+
+  // Serve generated Animated GIF file endpoint
+  app.get("/api/get-gif/:fileId", (req, res) => {
+    const { fileId } = req.params;
+    const safeFile = path.basename(fileId);
+    const filePath = path.join("/tmp", "gif_store", safeFile);
+
+    if (fs.existsSync(filePath)) {
+      res.setHeader("Content-Type", "image/gif");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.sendFile(filePath);
+    } else {
+      res.status(404).send("GIF 파일을 찾을 수 없습니다.");
+    }
+  });
+
+  // Video Proxy Stream Endpoint for HTML5 Video Player
+  app.get("/api/stream-video", async (req, res) => {
+    const videoUrl = req.query.url as string;
+    if (!videoUrl) {
+      return res.status(400).send("videoUrl parameter is required");
+    }
+
+    try {
+      const headers: Record<string, string> = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      };
+
+      if (req.headers.range) {
+        headers["Range"] = req.headers.range as string;
+      }
+
+      const response = await fetch(videoUrl, { headers });
+
+      if (!response.ok && response.status !== 206) {
+        return res.status(response.status).send("Failed to stream video source");
+      }
+
+      res.status(response.status);
+
+      const forwardHeaders = ["content-type", "content-length", "content-range", "accept-ranges"];
+      forwardHeaders.forEach((h) => {
+        const val = response.headers.get(h);
+        if (val) res.setHeader(h, val);
+      });
+
+      if (!res.getHeader("content-type")) {
+        res.setHeader("Content-Type", "video/mp4");
+      }
+      res.setHeader("Accept-Ranges", "bytes");
+
+      if (response.body) {
+        const { Readable } = await import("stream");
+        const nodeStream = Readable.fromWeb(response.body as any);
+        nodeStream.pipe(res);
+      } else {
+        res.end();
+      }
+    } catch (e: any) {
+      console.error("[Video Proxy Stream Error]", e);
+      if (!res.headersSent) {
+        res.status(500).send("Video streaming error: " + e.message);
+      }
+    }
+  });
+
+  // Direct MP4 Video Download Proxy Endpoint
+  app.get("/api/download-video", async (req, res) => {
+    const videoUrl = req.query.url as string;
+    const filename = (req.query.filename as string) || "x-video.mp4";
+
+    if (!videoUrl) {
+      return res.status(400).send("Video URL is required");
+    }
+
+    try {
+      const response = await fetch(videoUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+      });
+
+      if (!response.ok) {
+        return res.status(response.status).send("Failed to stream video file");
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      res.setHeader("Content-Type", "video/mp4");
+      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(filename)}"`);
+      res.setHeader("Content-Length", buffer.length);
+      res.send(buffer);
+    } catch (e: any) {
+      console.error("Failed to proxy video download:", e);
+      res.status(500).send("Error downloading video file");
+    }
+  });
+
+  // Direct Image Download Proxy Endpoint
+  app.get("/api/download-image", async (req, res) => {
+    const imageUrl = req.query.url as string;
+    const filename = (req.query.filename as string) || "telegram-image.jpg";
+
+    if (!imageUrl) {
+      return res.status(400).send("Image URL is required");
+    }
+
+    try {
+      const response = await fetch(imageUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+      });
+
+      if (!response.ok) {
+        return res.status(response.status).send("Failed to stream image file");
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      const contentType = response.headers.get("content-type") || "image/jpeg";
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(filename)}"`);
+      res.setHeader("Content-Length", buffer.length);
+      res.send(buffer);
+    } catch (e: any) {
+      console.error("Failed to proxy image download:", e);
+      res.status(500).send("Error downloading image file");
+    }
+  });
+
   // Unified Screenshot Endpoint
   app.post("/api/screenshot", async (req, res) => {
     const { url, platform, theme } = req.body;
@@ -2484,12 +3155,32 @@ async function startServer() {
       let finalUrl = url;
       let finalPostId = "post";
       let title = "";
+      let videoInfo: any = undefined;
+      let imageInfo: any = undefined;
 
       const protocol = req.headers["x-forwarded-proto"] || "https";
       const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:3000";
       const hostUrl = `${protocol}://${host}`;
 
-      if (targetPlatform === "x") {
+      if (targetPlatform === "x_video") {
+        const result = await extractXVideoMedia(url, selectedTheme);
+        buffer = result.screenshotBuffer;
+        videoInfo = result.videoInfo;
+        finalUrl = result.normalizedUrl;
+        finalPostId = result.postId;
+      } else if (targetPlatform === "telegram_video") {
+        const result = await extractTelegramVideoMedia(url, selectedTheme);
+        buffer = result.screenshotBuffer;
+        videoInfo = result.videoInfo;
+        finalUrl = result.normalizedUrl;
+        finalPostId = result.postId;
+      } else if (targetPlatform === "telegram_image") {
+        const result = await extractTelegramImageMedia(url, selectedTheme);
+        buffer = result.screenshotBuffer;
+        imageInfo = result.imageInfo;
+        finalUrl = result.normalizedUrl;
+        finalPostId = result.postId;
+      } else if (targetPlatform === "x") {
         const normalized = normalizeXPostUrl(url);
         if (!normalized) {
           return res.status(400).json({ error: "올바른 X 게시물 URL 형식이 아닙니다." });
@@ -2511,18 +3202,20 @@ async function startServer() {
         return res.status(400).json({ error: "지원하지 않는 플랫폼입니다." });
       }
 
-      const isSvg = buffer.toString("utf-8").trim().startsWith("<svg") || buffer.toString("utf-8").trim().startsWith("<?xml");
+      const isSvg = buffer.length > 0 && (buffer.toString("utf-8").trim().startsWith("<svg") || buffer.toString("utf-8").trim().startsWith("<?xml"));
       const mimeType = isSvg ? "image/svg+xml" : "image/png";
-      const base64Image = buffer.toString("base64");
+      const base64Image = buffer.length > 0 ? buffer.toString("base64") : "";
 
       res.json({
         success: true,
-        image: `data:${mimeType};base64,${base64Image}`,
+        image: base64Image ? `data:${mimeType};base64,${base64Image}` : undefined,
         filename: `${targetPlatform}-post-${finalPostId}.${isSvg ? "svg" : "png"}`,
         postId: finalPostId,
         normalizedUrl: finalUrl,
         title: title || undefined,
-        platform: targetPlatform
+        platform: targetPlatform,
+        videoInfo,
+        imageInfo
       });
     } catch (err: any) {
       console.error("[Screenshot Error]", err);

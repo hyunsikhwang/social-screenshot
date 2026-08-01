@@ -1,6 +1,33 @@
-export type Platform = "auto" | "x" | "youtube" | "telegram" | "youtube_thumb";
+export type Platform = "auto" | "x" | "x_video" | "youtube" | "telegram" | "telegram_video" | "telegram_image" | "youtube_thumb";
 
 export type Theme = "light" | "dark";
+
+export interface VideoMediaInfo {
+  videoUrl: string;
+  thumbnailUrl?: string;
+  durationMs?: number;
+  durationFormatted?: string;
+  resolution?: string;
+  width?: number;
+  height?: number;
+  tweetText?: string;
+  authorName?: string;
+  authorHandle?: string;
+  authorAvatar?: string;
+  likes?: number;
+  retweets?: number;
+  views?: number;
+}
+
+export interface ImageMediaInfo {
+  imageUrls: string[];
+  primaryImageUrl: string;
+  tweetText?: string;
+  authorName?: string;
+  authorHandle?: string;
+  authorAvatar?: string;
+  views?: number;
+}
 
 export interface ScreenshotConfig {
   url: string;
@@ -18,4 +45,6 @@ export interface ScreenshotHistoryItem {
   imageUrl: string;
   filename: string;
   normalizedUrl: string;
+  videoInfo?: VideoMediaInfo;
+  imageInfo?: ImageMediaInfo;
 }
