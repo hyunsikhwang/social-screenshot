@@ -1,5 +1,5 @@
 import React from "react";
-import { Twitter, Youtube, Send, Image, Sparkles, Video } from "lucide-react";
+import { Twitter, Youtube, Send, Image, Sparkles, Video, Globe } from "lucide-react";
 import { Platform } from "../types";
 
 interface PlatformTabsProps {
@@ -71,6 +71,14 @@ export default function PlatformTabs({ activePlatform, onChange }: PlatformTabsP
       icon: Image,
       color: "hover:text-emerald-600 hover:border-emerald-300",
       activeBg: "bg-emerald-50 text-emerald-700 border-emerald-400/90 shadow-sm ring-1 ring-emerald-400/20",
+      inactiveBg: "text-slate-600 bg-white border-slate-200 hover:bg-slate-50 hover:text-slate-900",
+    },
+    {
+      id: "web_image" as Platform,
+      name: "웹/블로그 이미지 추출",
+      icon: Globe,
+      color: "hover:text-amber-600 hover:border-amber-300",
+      activeBg: "bg-amber-50 text-amber-700 border-amber-400/90 shadow-sm ring-1 ring-amber-400/20",
       inactiveBg: "text-slate-600 bg-white border-slate-200 hover:bg-slate-50 hover:text-slate-900",
     },
   ];

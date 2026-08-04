@@ -1,4 +1,4 @@
-export type Platform = "auto" | "x" | "x_video" | "youtube" | "telegram" | "telegram_video" | "telegram_image" | "youtube_thumb";
+export type Platform = "auto" | "x" | "x_video" | "youtube" | "telegram" | "telegram_video" | "telegram_image" | "youtube_thumb" | "web_image";
 
 export type Theme = "light" | "dark";
 
@@ -29,6 +29,15 @@ export interface ImageMediaInfo {
   views?: number;
 }
 
+export interface WebImageMediaInfo {
+  pageTitle: string;
+  siteName?: string;
+  pageUrl: string;
+  description?: string;
+  imageUrls: string[];
+  totalExtractedCount: number;
+}
+
 export interface ScreenshotConfig {
   url: string;
   platform: Platform;
@@ -47,4 +56,5 @@ export interface ScreenshotHistoryItem {
   normalizedUrl: string;
   videoInfo?: VideoMediaInfo;
   imageInfo?: ImageMediaInfo;
+  webImageInfo?: WebImageMediaInfo;
 }

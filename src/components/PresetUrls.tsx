@@ -99,6 +99,16 @@ const PRESETS: Record<Platform, { label: string; url: string }[]> = {
       url: "https://telegram.me/s/telegram/201",
     },
   ],
+  web_image: [
+    {
+      label: "📝 Naver Official Blog",
+      url: "https://blog.naver.com/naver_diary/223250000000",
+    },
+    {
+      label: "🌐 Web/Blog Article Sample",
+      url: "https://news.google.com",
+    },
+  ],
 };
 
 export default function PresetUrls({ platform, onSelect }: PresetUrlsProps) {

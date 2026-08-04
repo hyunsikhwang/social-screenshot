@@ -21,10 +21,12 @@ import {
   Film,
 } from "lucide-react";
 
-import { Platform, Theme, ScreenshotHistoryItem, VideoMediaInfo, ImageMediaInfo } from "./types";
+import { Platform, Theme, ScreenshotHistoryItem, VideoMediaInfo, ImageMediaInfo, WebImageMediaInfo } from "./types";
 import PlatformTabs from "./components/PlatformTabs";
 import PresetUrls from "./components/PresetUrls";
 import HistoryPanel from "./components/HistoryPanel";
+import WebImageGallery from "./components/WebImageGallery";
+import TelegramImageGallery from "./components/TelegramImageGallery";
 
 // Gradient configurations for the backdrop preview
 const GRADIENTS = [
@@ -178,6 +180,7 @@ export default function App() {
     platform?: Platform;
     videoInfo?: VideoMediaInfo;
     imageInfo?: ImageMediaInfo;
+    webImageInfo?: WebImageMediaInfo;
   } | null>(null);
 
   // Copy to clipboard status
@@ -450,6 +453,7 @@ export default function App() {
         platform: data.platform || platform,
         videoInfo: data.videoInfo,
         imageInfo: data.imageInfo,
+        webImageInfo: data.webImageInfo,
       };
 
       setActiveScreenshot(newScreenshot);
@@ -461,11 +465,12 @@ export default function App() {
         platform: data.platform || platform,
         theme,
         timestamp: new Date().toISOString(),
-        imageUrl: imageUrl || data.videoInfo?.thumbnailUrl || data.imageInfo?.primaryImageUrl || "",
+        imageUrl: imageUrl || data.videoInfo?.thumbnailUrl || data.imageInfo?.primaryImageUrl || (data.webImageInfo?.imageUrls?.[0] || ""),
         filename,
         normalizedUrl: data.normalizedUrl,
         videoInfo: data.videoInfo,
         imageInfo: data.imageInfo,
+        webImageInfo: data.webImageInfo,
       };
 
       const updatedHistory = [historyItem, ...history.filter((h) => h.url !== url.trim())].slice(0, 6);
@@ -489,6 +494,8 @@ export default function App() {
       normalizedUrl: item.normalizedUrl,
       postId: item.filename.replace(`${item.platform}-post-`, "").replace(".png", ""),
       videoInfo: item.videoInfo,
+      imageInfo: item.imageInfo,
+      webImageInfo: item.webImageInfo,
     });
     setError(null);
     setCopyStatus("idle");
@@ -625,15 +632,7 @@ export default function App() {
 
   const getXQuoteUrl = () => {
     if (!activeScreenshot) return "";
-    let text = "멋진 스크린샷 카드로 캡처했습니다. 📸✨";
-    if (platform === "youtube") {
-      text = "YouTube 커뮤니티 포스트를 멋진 스크린샷 카드로 생성했습니다. 📸✨";
-    } else if (platform === "youtube_thumb") {
-      text = "YouTube 비디오 썸네일을 멋진 스크린샷 카드로 생성했습니다. 📸✨";
-    } else if (platform === "telegram") {
-      text = "Telegram 포스트를 멋진 스크린샷 카드로 생성했습니다. 📸✨";
-    }
-    return `https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(
+    return `https://x.com/intent/tweet?url=${encodeURIComponent(
       activeScreenshot.normalizedUrl
     )}`;
   };
@@ -997,148 +996,20 @@ export default function App() {
               {/* SCENARIO C: Active Screenshot or Video Loaded State */}
               {!isLoading && activeScreenshot && (
                 <div className="w-full h-full flex flex-col justify-center items-center py-2" id="preview-result-state">
-                  {activeScreenshot.imageInfo ? (
-                    /* Image Extraction Display (Telegram Images) */
-                    <div className="w-full max-w-xl bg-slate-950 rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-2xl space-y-4 animate-fade-in">
-                      <div className="flex flex-wrap items-center justify-between border-b border-slate-800/80 pb-3 gap-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                          <span className="text-xs font-bold text-white tracking-wide">
-                            🖼️ 텔레그램 첨부 이미지 추출 완료 ({activeScreenshot.imageInfo.imageUrls.length}개)
-                          </span>
-                        </div>
-                        {/* Tab Switcher: Extracted Images Gallery vs Post Card View */}
-                        <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-0.5 rounded-lg text-[11px]">
-                          <button
-                            type="button"
-                            onClick={() => setImageDisplayMode("gallery")}
-                            className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                              imageDisplayMode === "gallery"
-                                ? "bg-emerald-600 text-white shadow-xs"
-                                : "text-slate-400 hover:text-slate-200"
-                            }`}
-                          >
-                            <Image className="w-3 h-3" />
-                            <span>추출 이미지 갤러리</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setImageDisplayMode("card")}
-                            className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                              imageDisplayMode === "card"
-                                ? "bg-cyan-600 text-white shadow-xs"
-                                : "text-slate-400 hover:text-slate-200"
-                            }`}
-                          >
-                            <Camera className="w-3 h-3" />
-                            <span>포스트 카드 캡처</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Mode A: Extracted Images Gallery */}
-                      {imageDisplayMode === "gallery" && (
-                        <div className="space-y-4">
-                          <div className={`grid gap-3 ${activeScreenshot.imageInfo.imageUrls.length > 1 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"}`}>
-                            {activeScreenshot.imageInfo.imageUrls.map((imgUrl, idx) => (
-                              <div
-                                key={idx}
-                                className="bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden p-2.5 space-y-2 flex flex-col justify-between shadow-lg group"
-                              >
-                                <div className="relative rounded-lg overflow-hidden bg-black aspect-auto min-h-[160px] max-h-[300px] flex items-center justify-center">
-                                  <img
-                                    src={imgUrl}
-                                    alt={`Extracted TG image ${idx + 1}`}
-                                    className="w-full h-full object-contain rounded-md"
-                                    referrerPolicy="no-referrer"
-                                  />
-                                  <div className="absolute top-2 left-2 bg-black/70 backdrop-blur-xs text-emerald-300 border border-emerald-500/30 text-[10px] font-mono px-2 py-0.5 rounded-md font-bold">
-                                    IMG #{idx + 1}
-                                  </div>
-                                </div>
-
-                                <div className="grid grid-cols-2 gap-1.5 text-xs pt-1">
-                                  <a
-                                    href={`/api/download-image?url=${encodeURIComponent(imgUrl)}&filename=${encodeURIComponent(`telegram-image-${activeScreenshot.postId}-${idx + 1}.jpg`)}`}
-                                    download={`telegram-image-${activeScreenshot.postId}-${idx + 1}.jpg`}
-                                    className="py-2 px-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-[11px] flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer"
-                                  >
-                                    <Download className="w-3.5 h-3.5" />
-                                    <span>다운로드</span>
-                                  </a>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      navigator.clipboard.writeText(imgUrl);
-                                      setImageCopyIndex(idx);
-                                      setTimeout(() => setImageCopyIndex(null), 3000);
-                                    }}
-                                    className="py-2 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-lg text-[11px] border border-slate-700 flex items-center justify-center gap-1 transition-all cursor-pointer"
-                                  >
-                                    {imageCopyIndex === idx ? (
-                                      <>
-                                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                        <span>복사됨!</span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Copy className="w-3.5 h-3.5" />
-                                        <span>URL 복사</span>
-                                      </>
-                                    )}
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Mode B: Post Card Capture */}
-                      {imageDisplayMode === "card" && activeScreenshot.imageUrl && (
-                        <div
-                          className={`w-full rounded-xl p-4 sm:p-6 transition-all duration-500 shadow-2xl flex items-center justify-center ${activeGradientClass}`}
-                          id="gradient-backdrop-canvas"
-                        >
-                          <div className="relative group rounded-xl select-all overflow-hidden flex items-center justify-center">
-                            <img
-                              src={activeScreenshot.imageUrl}
-                              alt="Telegram Post Card Screenshot"
-                              className="max-h-[300px] sm:max-h-[380px] w-auto h-auto block select-all cursor-zoom-in object-contain rounded-xl shadow-2xl border border-slate-200"
-                              referrerPolicy="no-referrer"
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Author & Post Text Meta Box */}
-                      <div className="bg-slate-900/90 rounded-xl p-3.5 border border-slate-800/80 space-y-2 text-xs">
-                        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                          <div className="flex items-center gap-2">
-                            {activeScreenshot.imageInfo.authorAvatar && (
-                              <img
-                                src={activeScreenshot.imageInfo.authorAvatar}
-                                alt="Author Avatar"
-                                className="w-6 h-6 rounded-full border border-slate-700 object-cover"
-                              />
-                            )}
-                            <span className="font-bold text-slate-200">{activeScreenshot.imageInfo.authorName}</span>
-                            <span className="text-slate-400">@{activeScreenshot.imageInfo.authorHandle}</span>
-                          </div>
-                          {activeScreenshot.imageInfo.views ? (
-                            <span className="text-slate-400 font-mono text-[11px]">
-                              👁️ {activeScreenshot.imageInfo.views.toLocaleString()} 회
-                            </span>
-                          ) : null}
-                        </div>
-                        {activeScreenshot.imageInfo.tweetText && (
-                          <p className="text-slate-300 leading-relaxed text-xs pt-1 select-all">
-                            {activeScreenshot.imageInfo.tweetText}
-                          </p>
-                        )}
-                      </div>
-                    </div>
+                  {activeScreenshot.webImageInfo ? (
+                    /* Web/Blog Image Extraction Display & Batch Extractor */
+                    <WebImageGallery
+                      webImageInfo={activeScreenshot.webImageInfo}
+                      imageUrl={activeScreenshot.imageUrl}
+                      postId={activeScreenshot.postId}
+                    />
+                  ) : activeScreenshot.imageInfo ? (
+                    /* Image Extraction Display (Telegram Images Batch Extractor) */
+                    <TelegramImageGallery
+                      imageInfo={activeScreenshot.imageInfo}
+                      imageUrl={activeScreenshot.imageUrl}
+                      postId={activeScreenshot.postId || "telegram"}
+                    />
                   ) : activeScreenshot.videoInfo ? (
                     /* Video Extraction Display */
                     <div className="w-full max-w-xl bg-slate-950 rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-2xl space-y-4 animate-fade-in">
@@ -1323,7 +1194,44 @@ export default function App() {
             {/* Downward Workspace Controls & Intended Share Actions */}
             {!isLoading && activeScreenshot && (
               <div className="mt-6 pt-4 border-t border-slate-100 space-y-4 shrink-0" id="preview-actions-container">
-                {activeScreenshot.imageInfo ? (
+                {activeScreenshot.webImageInfo ? (
+                  /* Web Image Action Controls */
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <a
+                        href={activeScreenshot.webImageInfo.pageUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center justify-center gap-2 py-3 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-lg shadow-amber-600/20 text-xs tracking-wide transition-all cursor-pointer"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                        🌐 원문 웹사이트/블로그로 이동
+                      </a>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(activeScreenshot.webImageInfo!.pageUrl);
+                          setCopyStatus("copied");
+                          setTimeout(() => setCopyStatus("idle"), 3000);
+                        }}
+                        className="flex items-center justify-center gap-2 py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold rounded-xl border border-slate-700 text-xs tracking-wide transition-all cursor-pointer shadow-sm"
+                      >
+                        {copyStatus === "copied" ? (
+                          <>
+                            <Check className="w-4 h-4 text-emerald-400" />
+                            원문 URL 복사 완료! 🔗
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4" />
+                            🔗 원문 웹페이지 URL 복사
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                ) : activeScreenshot.imageInfo ? (
                   /* Image Action Controls */
                   <div className="space-y-3">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

@@ -1,86 +1,8 @@
 import path from "path";
 import fs from "fs";
 import { execSync } from "child_process";
-import ffmpegStatic from "ffmpeg-static";
-
-const getFfmpegBin = (): string => {
-  if (ffmpegStatic && fs.existsSync(ffmpegStatic)) {
-    return ffmpegStatic;
-  }
-  if (fs.existsSync("/usr/bin/ffmpeg")) {
-    return "/usr/bin/ffmpeg";
-  }
-  if (fs.existsSync("/usr/local/bin/ffmpeg")) {
-    return "/usr/local/bin/ffmpeg";
-  }
-  return "ffmpeg";
-};
-
-// Resolve and configure the path for Playwright browsers.
-const projectRoot = process.cwd();
-const builtBrowsersPath = path.join(projectRoot, "dist", ".playwright-browsers");
-const fallbackBrowsersPath = "/tmp/.playwright-browsers";
-
-let browsersPath = fallbackBrowsersPath;
-
-if (
-  fs.existsSync(builtBrowsersPath) &&
-  (fs.existsSync(path.join(builtBrowsersPath, "chromium-1228")) ||
-   fs.existsSync(path.join(builtBrowsersPath, "chromium_headless_shell-1228")))
-) {
-  browsersPath = builtBrowsersPath;
-  console.log(`[Playwright Config] Using built-in browser cache in dist: ${browsersPath}`);
-} else {
-  browsersPath = fallbackBrowsersPath;
-  console.log(`[Playwright Config] Built-in browser cache not found or incomplete. Using writable tmp path: ${browsersPath}`);
-  
-  // Ensure browsers are prepopulated in the writable /tmp directory
-  try {
-    fs.mkdirSync(browsersPath, { recursive: true });
-    
-    // Check if we already have chromium or chromium_headless_shell in our writable path
-    const hasChromium = fs.existsSync(path.join(browsersPath, "chromium-1228")) || 
-                       fs.existsSync(path.join(browsersPath, "chromium_headless_shell-1228"));
-                       
-    if (!hasChromium) {
-      console.log("[Playwright Config] Writable browser cache is empty. Searching for pre-installed global cache...");
-      const homeDir = process.env.HOME || "/root";
-      const globalCachePath1 = path.join(homeDir, ".cache", "ms-playwright");
-      const globalCachePath2 = "/home/node/.cache/ms-playwright";
-      
-      let sourcePath = "";
-      if (fs.existsSync(globalCachePath1) && (fs.existsSync(path.join(globalCachePath1, "chromium-1228")) || fs.existsSync(path.join(globalCachePath1, "chromium_headless_shell-1228")))) {
-        sourcePath = globalCachePath1;
-      } else if (fs.existsSync(globalCachePath2) && (fs.existsSync(path.join(globalCachePath2, "chromium-1228")) || fs.existsSync(path.join(globalCachePath2, "chromium_headless_shell-1228")))) {
-        sourcePath = globalCachePath2;
-      }
-      
-      if (sourcePath) {
-        console.log(`[Playwright Config] Pre-installed global cache found at: ${sourcePath}. Copying to writable cache...`);
-        try {
-          // Use cp command for extremely fast recursive copy
-          execSync(`cp -rp ${sourcePath}/* ${browsersPath}/`, { stdio: "inherit" });
-          console.log("[Playwright Config] Fast copy completed successfully!");
-        } catch (copyErr) {
-          console.warn("[Playwright Config] Failed to copy pre-installed cache:", copyErr);
-        }
-      } else {
-        console.log("[Playwright Config] No pre-installed global cache found. Will download dynamically on first launch.");
-      }
-    } else {
-      console.log("[Playwright Config] Writable browser cache is already populated.");
-    }
-  } catch (err) {
-    console.error("[Playwright Config] Error during initialization of writable browser cache:", err);
-  }
-}
-
-process.env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
-console.log(`[Playwright Config] Active PLAYWRIGHT_BROWSERS_PATH: ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
-
-import express from "express";
 import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
+import ffmpegStatic from "ffmpeg-static";
 
 // Safely resolve filename and dirname without TDZ or ESM/CJS conflicts
 let resolvedFilename = "";
@@ -97,8 +19,83 @@ try {
 const __filename = resolvedFilename;
 const __dirname = resolvedDirname;
 
+const getFfmpegBin = (): string => {
+  if (ffmpegStatic && fs.existsSync(ffmpegStatic)) {
+    return ffmpegStatic;
+  }
+  if (fs.existsSync("/usr/bin/ffmpeg")) {
+    return "/usr/bin/ffmpeg";
+  }
+  if (fs.existsSync("/usr/local/bin/ffmpeg")) {
+    return "/usr/local/bin/ffmpeg";
+  }
+  return "ffmpeg";
+};
+
+// Resolve and configure the path for Playwright browsers.
+const projectRoot = process.cwd();
+const candidatePaths = [
+  path.resolve(projectRoot, "dist", ".playwright-browsers"),
+  path.resolve(projectRoot, ".playwright-browsers"),
+  path.resolve(__dirname, ".playwright-browsers"),
+  path.resolve(__dirname, "..", ".playwright-browsers"),
+  "/tmp/.playwright-browsers",
+];
+
+let browsersPath = "/tmp/.playwright-browsers";
+
+for (const cand of candidatePaths) {
+  if (fs.existsSync(cand)) {
+    try {
+      const entries = fs.readdirSync(cand);
+      if (entries.some((e) => e.startsWith("chromium") || e.startsWith("chromium_headless_shell"))) {
+        browsersPath = cand;
+        console.log(`[Playwright Config] Found browser cache at: ${browsersPath}`);
+        break;
+      }
+    } catch {}
+  }
+}
+
+if (browsersPath === "/tmp/.playwright-browsers") {
+  console.log(`[Playwright Config] Built-in browser cache not found or incomplete. Using writable tmp path: ${browsersPath}`);
+  try {
+    fs.mkdirSync(browsersPath, { recursive: true });
+    const hasChromium = fs.existsSync(path.join(browsersPath, "chromium-1228")) || 
+                        fs.existsSync(path.join(browsersPath, "chromium_headless_shell-1228"));
+    if (!hasChromium) {
+      console.log("[Playwright Config] Writable browser cache is empty. Searching for pre-installed global cache...");
+      const homeDir = process.env.HOME || "/root";
+      const globalCachePath1 = path.join(homeDir, ".cache", "ms-playwright");
+      const globalCachePath2 = "/home/node/.cache/ms-playwright";
+      let sourcePath = "";
+      if (fs.existsSync(globalCachePath1)) sourcePath = globalCachePath1;
+      else if (fs.existsSync(globalCachePath2)) sourcePath = globalCachePath2;
+
+      if (sourcePath) {
+        console.log(`[Playwright Config] Pre-installed global cache found at: ${sourcePath}. Copying to writable cache...`);
+        try {
+          execSync(`cp -rp ${sourcePath}/* ${browsersPath}/`, { stdio: "inherit" });
+          console.log("[Playwright Config] Fast copy completed successfully!");
+        } catch (copyErr) {
+          console.warn("[Playwright Config] Failed to copy pre-installed cache:", copyErr);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[Playwright Config] Error during initialization of writable browser cache:", err);
+  }
+}
+
+process.env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
+console.log(`[Playwright Config] Active PLAYWRIGHT_BROWSERS_PATH: ${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
+
+import express from "express";
+import { createServer as createViteServer } from "vite";
+
 // Helper to launch Chromium and dynamically install it if missing
 async function launchBrowser(args: string[] = []) {
+  process.env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
   const { chromium } = await import("playwright-core");
   const baseArgs = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"];
   const finalArgs = args.length > 0 ? args : baseArgs;
@@ -398,10 +395,9 @@ async function captureViaMicrolink(targetUrl: string, elementSelector: string, t
     params.append("styles", xCss);
   } else if (targetUrl.includes("t.me") || targetUrl.includes("telegram.me")) {
     params.append("screenshot.waitFor", ".tgme_widget_message");
-    params.append("screenshot.delay", "3000");
+    params.append("screenshot.delay", "1000");
     // Force mobile-sized viewport in Microlink fallback for Telegram to get perfect crops without margins
     params.append("viewport.width", "564");
-    params.append("screenshot.fullPage", "true");
     params.append("screenshot.omitBackground", "true");
 
     const bgColor = theme === "dark" ? "#0b1630" : "#ffffff";
@@ -1473,6 +1469,225 @@ async function generateYoutubeSvg(
   return Buffer.from(svgContent, "utf-8");
 }
 
+function getImageDimensions(buf: Buffer): { width: number; height: number } | null {
+  if (!buf || buf.length < 10) return null;
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    try {
+      return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+    } catch {
+      return null;
+    }
+  }
+  if (buf[0] === 0xff && buf[1] === 0xd8) {
+    let offset = 2;
+    while (offset < buf.length - 8) {
+      if (buf[offset] !== 0xff) break;
+      const marker = buf[offset + 1];
+      if (marker >= 0xc0 && marker <= 0xc3) {
+        try {
+          return { height: buf.readUInt16BE(offset + 5), width: buf.readUInt16BE(offset + 7) };
+        } catch {
+          return null;
+        }
+      }
+      try {
+        const len = buf.readUInt16BE(offset + 2);
+        offset += 2 + len;
+      } catch {
+        break;
+      }
+    }
+  }
+  return null;
+}
+
+async function urlToDataUriAndDimensions(url?: string): Promise<{ dataUri: string; width?: number; height?: number }> {
+  if (!url) return { dataUri: "" };
+  if (url.startsWith("data:")) return { dataUri: url };
+  try {
+    let cleanUrl = url;
+    if (cleanUrl.startsWith("//")) cleanUrl = "https:" + cleanUrl;
+    const res = await fetch(cleanUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+    });
+    if (!res.ok) return { dataUri: cleanUrl };
+    const arrayBuffer = await res.arrayBuffer();
+    const buf = Buffer.from(arrayBuffer);
+    const contentType = res.headers.get("content-type") || "image/jpeg";
+    const dim = getImageDimensions(buf);
+    return {
+      dataUri: `data:${contentType};base64,${buf.toString("base64")}`,
+      width: dim?.width,
+      height: dim?.height,
+    };
+  } catch (e) {
+    return { dataUri: url || "" };
+  }
+}
+
+function extractTelegramImagesFromHtml(html: string, avatarUrl: string = ""): string[] {
+  const images: string[] = [];
+
+  // 1. Highest priority: photo wrap / photo elements
+  const photoWrapMatches = [
+    ...html.matchAll(
+      /class="[^"]*(?:tgme_widget_message_photo_wrap|tgme_widget_message_photo|tgme_widget_message_video_thumb)[^"]*"[^>]*style=["'][^"']*background-image:\s*url\((?:['"])?([^'"\)]+)(?:['"])?\)/gi
+    ),
+  ].map((m) => m[1]);
+
+  for (let img of photoWrapMatches) {
+    if (img.startsWith("//")) img = "https:" + img;
+    if (img && img !== avatarUrl && !images.includes(img)) {
+      images.push(img);
+    }
+  }
+
+  // 2. Secondary: generic background-image or src matches
+  const bgMatches = [...html.matchAll(/background-image:\s*url\((?:['"])?([^'"\)]+)(?:['"])?\)/gi)].map((m) => m[1]);
+  const srcMatches = [...html.matchAll(/src=["']([^'"]+)["']/gi)].map((m) => m[1]);
+
+  for (let imgUrl of [...srcMatches, ...bgMatches]) {
+    if (imgUrl.startsWith("//")) imgUrl = "https:" + imgUrl;
+    if (
+      imgUrl.includes("user_photo") ||
+      imgUrl.includes("emoji") ||
+      imgUrl.includes("telegram.org/img/") ||
+      imgUrl.includes("widget") ||
+      imgUrl === avatarUrl
+    ) {
+      continue;
+    }
+    if ((imgUrl.includes("telesco.pe") || imgUrl.includes("telegram.org") || imgUrl.match(/\.(jpg|jpeg|png|webp)/i)) && !images.includes(imgUrl)) {
+      images.push(imgUrl);
+    }
+  }
+
+  return images;
+}
+
+async function generateTelegramSvgCard(
+  info: {
+    authorName: string;
+    authorHandle: string;
+    authorAvatar?: string;
+    text: string;
+    imageUrl?: string;
+    views?: number;
+  },
+  theme: "light" | "dark" = "light"
+): Promise<Buffer> {
+  const isDark = theme === "dark";
+  const bgColor = isDark ? "#0b1630" : "#ffffff";
+  const textColor = isDark ? "#f8fafc" : "#0f172a";
+  const subTextColor = isDark ? "#94a3b8" : "#64748b";
+  const borderColor = isDark ? "#1e293b" : "#e2e8f0";
+
+  const author = escapeHtml(info.authorName || info.authorHandle || "Telegram Channel");
+  const handle = escapeHtml(info.authorHandle || "telegram");
+  const text = escapeHtml(info.text || "");
+  const views = info.views ? `${info.views.toLocaleString()} views` : "";
+
+  // Convert image URLs to Data URIs so SVGs embed image data directly and render reliably in <img>
+  const [avatarRes, imgRes] = await Promise.all([
+    urlToDataUriAndDimensions(info.authorAvatar),
+    urlToDataUriAndDimensions(info.imageUrl),
+  ]);
+
+  const avatarDataUri = avatarRes.dataUri;
+  const imgDataUri = imgRes.dataUri;
+
+  // Split text into lines for SVG text rendering
+  const maxLineLen = 42;
+  const rawLines = text.split("\n");
+  const lines: string[] = [];
+  for (const rl of rawLines) {
+    if (rl.length <= maxLineLen) {
+      lines.push(rl);
+    } else {
+      let cur = rl;
+      while (cur.length > maxLineLen) {
+        lines.push(cur.slice(0, maxLineLen));
+        cur = cur.slice(maxLineLen);
+      }
+      if (cur) lines.push(cur);
+    }
+  }
+
+  const textLineHeight = 22;
+  const textHeight = Math.max(1, lines.length) * textLineHeight;
+
+  let imgHeight = 0;
+  let imgSvg = "";
+  if (imgDataUri) {
+    const targetWidth = 512;
+    if (imgRes.width && imgRes.height && imgRes.width > 0) {
+      imgHeight = Math.min(Math.round(targetWidth * (imgRes.height / imgRes.width)), 600);
+    } else {
+      imgHeight = 300;
+    }
+
+    imgSvg = `
+      <g transform="translate(24, ${90 + textHeight})">
+        <rect width="${targetWidth}" height="${imgHeight}" rx="12" fill="${isDark ? "#1e293b" : "#f1f5f9"}" />
+        <image href="${escapeHtml(imgDataUri)}" x="0" y="0" width="${targetWidth}" height="${imgHeight}" preserveAspectRatio="xMidYMid meet" clip-path="url(#img-clip)" />
+      </g>
+    `;
+  }
+
+  const cardHeight = 110 + textHeight + (imgHeight ? imgHeight + 20 : 0) + 30;
+
+  const svg = `
+    <svg width="560" height="${cardHeight}" viewBox="0 0 560 ${cardHeight}" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <clipPath id="avatar-clip">
+          <circle cx="48" cy="48" r="20" />
+        </clipPath>
+        <clipPath id="img-clip">
+          <rect width="512" height="${imgHeight}" rx="12" />
+        </clipPath>
+      </defs>
+
+      <!-- Card Background -->
+      <rect width="560" height="${cardHeight}" rx="16" fill="${bgColor}" stroke="${borderColor}" stroke-width="1" />
+
+      <!-- Header -->
+      <g transform="translate(0, 0)">
+        ${
+          avatarDataUri
+            ? `<image href="${escapeHtml(avatarDataUri)}" x="28" y="28" width="40" height="40" clip-path="url(#avatar-clip)" />`
+            : `<circle cx="48" cy="48" r="20" fill="${isDark ? "#38bdf8" : "#0284c7"}" />
+               <text x="48" y="54" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle">${author.charAt(0).toUpperCase()}</text>`
+        }
+        <text x="80" y="44" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="bold" fill="${textColor}">${author}</text>
+        <text x="80" y="62" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" fill="${subTextColor}">@${handle}</text>
+      </g>
+
+      <!-- Post Text -->
+      <g transform="translate(24, 85)">
+        ${lines
+          .map(
+            (line, idx) =>
+              `<text x="0" y="${idx * textLineHeight}" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15" fill="${textColor}">${line}</text>`
+          )
+          .join("")}
+      </g>
+
+      <!-- Image Attachment -->
+      ${imgSvg}
+
+      <!-- Footer / Views -->
+      <g transform="translate(24, ${cardHeight - 16})">
+        <text x="0" y="0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" fill="${subTextColor}">${views ? views + " • " : ""}Telegram Post</text>
+      </g>
+    </svg>
+  `.trim();
+
+  return Buffer.from(svg, "utf-8");
+}
+
 async function captureTelegramPost(postUrl: string, theme: "light" | "dark" = "light"): Promise<Buffer> {
   // 1. URL 객체를 사용해 안전하게 경로 파싱하기
   let parsedUrl: URL;
@@ -1648,7 +1863,6 @@ body *,
       await page.waitForTimeout(1000);
 
       // 텔레그램 카드 메시지 엘리먼트 자체를 완벽하고 정밀하게 크롭하여 캡처합니다.
-      // 이렇게 하면 상하좌우 그 어떤 불필요한 공백이나 오차도 근본적으로 존재하지 않고 포스트만 정확하게 잘려나옵니다.
       const screenshotBuffer = await cardLocator.screenshot({
         type: "png",
         omitBackground: true,
@@ -1659,9 +1873,68 @@ body *,
       await browser.close();
     }
   } catch (error) {
-    console.warn("[captureTelegramPost] Playwright failed, falling back to Microlink:", error);
-    // 폴백 시에도 여백이 전혀 없는 완벽한 크롭을 위해 .tgme_widget_message 카드 자체를 크롭 영역으로 넘깁니다.
-    return await captureViaMicrolink(embedUrl, ".tgme_widget_message", theme);
+    console.warn("[captureTelegramPost] Playwright failed, trying Microlink:", error);
+    try {
+      return await captureViaMicrolink(embedUrl, ".tgme_widget_message", theme);
+    } catch (microlinkError) {
+      console.warn("[captureTelegramPost] Microlink failed, fallback to direct SVG card generator:", microlinkError);
+      
+      try {
+        const res = await fetch(embedUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          },
+        });
+        if (res.ok) {
+          const html = await res.text();
+          const textMatch = html.match(/<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+          const text = textMatch ? textMatch[1].replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").trim() : "";
+
+          const authorMatch = html.match(/<div class="tgme_widget_message_author_name"[^>]*>([\s\S]*?)<\/div>/i) ||
+                              html.match(/<span class="tgme_widget_message_owner_name"[^>]*>([\s\S]*?)<\/span>/i);
+          const author = authorMatch ? authorMatch[1].replace(/<[^>]+>/g, "").trim() : channelName;
+
+          const avatarMatch = html.match(/<img class="tgme_widget_message_user_photo"[^>]+src=["']([^"']+)["']/i) ||
+                              html.match(/class="tgme_widget_message_user_photo[^"]*"[^>]*style=["'][^"']*background-image:\s*url\((?:["'])?([^"'\)]+)(?:["'])?\)/i);
+          const avatar = avatarMatch ? avatarMatch[1] : "";
+
+          const candidateImgs = extractTelegramImagesFromHtml(html, avatar);
+          const mainImg = candidateImgs[0] || "";
+
+          let views = 0;
+          const viewsMatch = html.match(/<span class="tgme_widget_message_views"[^>]*>([^<]+)<\/span>/i);
+          if (viewsMatch) {
+            const vStr = viewsMatch[1].trim().toUpperCase();
+            if (vStr.endsWith("K")) views = Math.round(parseFloat(vStr) * 1000);
+            else if (vStr.endsWith("M")) views = Math.round(parseFloat(vStr) * 1000000);
+            else views = parseInt(vStr.replace(/,/g, ""), 10) || 0;
+          }
+
+          return await generateTelegramSvgCard(
+            {
+              authorName: author,
+              authorHandle: channelName,
+              authorAvatar: avatar,
+              text,
+              imageUrl: mainImg,
+              views,
+            },
+            theme
+          );
+        }
+      } catch (fallbackErr) {
+        console.error("[captureTelegramPost] Direct fetch fallback failed:", fallbackErr);
+      }
+
+      return await generateTelegramSvgCard(
+        {
+          authorName: channelName,
+          authorHandle: channelName,
+          text: `Telegram Post (@${channelName}/${postId})`,
+        },
+        theme
+      );
+    }
   }
 }
 
@@ -2751,28 +3024,17 @@ async function startServer() {
       if (res.ok) {
         const html = await res.text();
 
-        // 1. Extract Images
-        const imageUrls: string[] = [];
-        const bgMatches = [...html.matchAll(/background-image:\s*url\((?:["'])?([^"'\)]+)(?:["'])?\)/gi)];
-
-        for (const m of bgMatches) {
-          let imgUrl = m[1];
-          if (imgUrl.startsWith("//")) imgUrl = "https:" + imgUrl;
-
-          // Ignore emojis, user avatars, system icons
-          if (
-            imgUrl.includes("/emoji/") ||
-            imgUrl.includes("user_photo") ||
-            imgUrl.includes("icon-") ||
-            imgUrl.includes("telegram.org/img/")
-          ) {
-            continue;
-          }
-
-          if (!imageUrls.includes(imgUrl)) {
-            imageUrls.push(imgUrl);
-          }
+        let authorAvatar = "";
+        const avatarImgMatch = html.match(/<img class="tgme_widget_message_user_photo"[^>]+src=["']([^"']+)["']/i);
+        const avatarStyleMatch = html.match(/class="tgme_widget_message_user_photo[^"]*"[^>]*style=["'][^"']*background-image:\s*url\((?:["'])?([^"'\)]+)(?:["'])?\)/i);
+        if (avatarImgMatch) {
+          authorAvatar = avatarImgMatch[1];
+        } else if (avatarStyleMatch) {
+          authorAvatar = avatarStyleMatch[1];
         }
+
+        // 1. Extract Images using extractTelegramImagesFromHtml
+        const imageUrls = extractTelegramImagesFromHtml(html, authorAvatar);
 
         // Fallback: Check t.me/s/channel/postId
         if (imageUrls.length === 0) {
@@ -2784,21 +3046,9 @@ async function startServer() {
           });
           if (sRes.ok) {
             const sHtml = await sRes.text();
-            const sBgMatches = [...sHtml.matchAll(/background-image:\s*url\((?:["'])?([^"'\)]+)(?:["'])?\)/gi)];
-            for (const m of sBgMatches) {
-              let imgUrl = m[1];
-              if (imgUrl.startsWith("//")) imgUrl = "https:" + imgUrl;
-              if (
-                imgUrl.includes("/emoji/") ||
-                imgUrl.includes("user_photo") ||
-                imgUrl.includes("icon-") ||
-                imgUrl.includes("telegram.org/img/")
-              ) {
-                continue;
-              }
-              if (!imageUrls.includes(imgUrl)) {
-                imageUrls.push(imgUrl);
-              }
+            const sImgs = extractTelegramImagesFromHtml(sHtml, authorAvatar);
+            for (const img of sImgs) {
+              if (!imageUrls.includes(img)) imageUrls.push(img);
             }
           }
         }
@@ -2866,6 +3116,399 @@ async function startServer() {
     }
 
     return { imageInfo: imageData, screenshotBuffer, normalizedUrl, postId: `${channel}_${postId}` };
+  }
+
+  // Web Page Card Capture Helper
+  async function captureWebPageCard(
+    pageTitle: string,
+    siteName: string,
+    description: string,
+    previewImages: string[],
+    theme: "light" | "dark" = "light"
+  ): Promise<Buffer> {
+    const isDark = theme === "dark";
+    const bgColor = isDark ? "#1e293b" : "#ffffff";
+    const textColor = isDark ? "#f8fafc" : "#0f172a";
+    const subTextColor = isDark ? "#94a3b8" : "#64748b";
+    const borderColor = isDark ? "#334155" : "#e2e8f0";
+
+    let browser: any = null;
+    try {
+      const playwright = await import("playwright-core");
+      browser = await playwright.chromium.launch({
+        headless: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      });
+      const page = await browser.newPage();
+      await page.setViewportSize({ width: 800, height: 1000 });
+
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            body {
+              background-color: transparent;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              padding: 30px;
+            }
+            .card {
+              background-color: ${bgColor};
+              border-radius: 20px;
+              border: 1px solid ${borderColor};
+              padding: 24px;
+              width: 580px;
+              box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+            }
+            .header {
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              margin-bottom: 16px;
+            }
+            .badge {
+              display: inline-flex;
+              align-items: center;
+              gap: 6px;
+              background: ${isDark ? "#451a03" : "#fef3c7"};
+              color: ${isDark ? "#fbbf24" : "#d97706"};
+              font-size: 12px;
+              font-weight: 700;
+              padding: 4px 10px;
+              border-radius: 9999px;
+              border: 1px solid ${isDark ? "#78350f" : "#fde68a"};
+            }
+            .domain {
+              font-size: 12px;
+              font-weight: 600;
+              color: ${subTextColor};
+              font-family: monospace;
+            }
+            .title {
+              font-size: 19px;
+              font-weight: 800;
+              color: ${textColor};
+              line-height: 1.4;
+              margin-bottom: 8px;
+              word-break: break-word;
+            }
+            .desc {
+              font-size: 13px;
+              color: ${subTextColor};
+              line-height: 1.5;
+              margin-bottom: 16px;
+              display: -webkit-box;
+              -webkit-line-clamp: 2;
+              -webkit-box-orient: vertical;
+              overflow: hidden;
+            }
+            .img-grid {
+              display: grid;
+              grid-template-columns: repeat(${Math.min(Math.max(previewImages.length, 1), 3)}, 1fr);
+              gap: 8px;
+              border-radius: 12px;
+              overflow: hidden;
+              margin-top: 12px;
+            }
+            .img-grid img {
+              width: 100%;
+              height: 120px;
+              object-fit: cover;
+              border-radius: 8px;
+              background: #000;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="card" id="web-page-card">
+            <div class="header">
+              <div class="badge">🌐 Web / Blog Image Extractor</div>
+              <span class="domain">${escapeHtml(siteName)}</span>
+            </div>
+            <h1 class="title">${escapeHtml(pageTitle)}</h1>
+            ${description ? `<p class="desc">${escapeHtml(description)}</p>` : ""}
+            ${previewImages.length > 0 ? `
+              <div class="img-grid">
+                ${previewImages.slice(0, 3).map(img => `<img src="${escapeHtml(img)}" />`).join("")}
+              </div>
+            ` : ""}
+          </div>
+        </body>
+        </html>
+      `;
+
+      await page.setContent(htmlContent);
+      await page.waitForLoadState("networkidle");
+      await page.waitForTimeout(300);
+
+      const cardElement = page.locator("#web-page-card");
+      const buffer = await cardElement.screenshot({ type: "png", omitBackground: true });
+      await browser.close();
+      return buffer;
+    } catch (e) {
+      console.warn("captureWebPageCard failed, returning empty buffer:", e);
+      if (browser) await browser.close();
+      return Buffer.from("");
+    }
+  }
+
+  // Web / Blog Image Extraction Helper
+  async function extractWebImages(
+    pageUrl: string,
+    theme: "light" | "dark" = "light"
+  ) {
+    let targetUrl = pageUrl.trim();
+    if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+      targetUrl = "https://" + targetUrl;
+    }
+
+    // Handle Naver Blog URL structure
+    if (targetUrl.includes("blog.naver.com")) {
+      const naverMatch = targetUrl.match(/blog\.naver\.com\/([a-zA-Z0-9_-]+)\/(\d+)/i) ||
+                         targetUrl.match(/blog\.naver\.com\/PostView\.naver\?blogId=([a-zA-Z0-9_-]+)&logNo=(\d+)/i);
+      if (naverMatch) {
+        const blogId = naverMatch[1];
+        const logNo = naverMatch[2];
+        targetUrl = `https://blog.naver.com/PostView.naver?blogId=${blogId}&logNo=${logNo}`;
+      }
+    }
+
+    let html = "";
+    try {
+      const res = await fetch(targetUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+          "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+          "Referer": targetUrl,
+        },
+        redirect: "follow",
+      });
+      if (res.ok) {
+        html = await res.text();
+      }
+    } catch (e) {
+      console.warn("[extractWebImages] fetch failed:", e);
+    }
+
+    // If Naver Blog mainFrame iframe is present, fetch inside iframe content
+    if (targetUrl.includes("blog.naver.com") && html.includes("mainFrame")) {
+      const iframeMatch = html.match(/id=["']mainFrame["'][^>]+src=["']([^"']+)["']/i) ||
+                          html.match(/src=["']([^"']+)["'][^>]+id=["']mainFrame["']/i);
+      if (iframeMatch && iframeMatch[1]) {
+        let iframeUrl = iframeMatch[1].trim();
+        if (iframeUrl.startsWith("/")) {
+          iframeUrl = "https://blog.naver.com" + iframeUrl;
+        }
+        try {
+          const iframeRes = await fetch(iframeUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+              "Referer": targetUrl,
+            },
+          });
+          if (iframeRes.ok) {
+            const iframeHtml = await iframeRes.text();
+            if (iframeHtml.length > 500) {
+              html = iframeHtml;
+            }
+          }
+        } catch (err) {
+          console.warn("[extractWebImages] failed to fetch Naver iframe:", err);
+        }
+      }
+    }
+
+    let pageTitle = "";
+    let siteName = "";
+    let description = "";
+
+    const baseUrl = new URL(targetUrl);
+
+    if (html) {
+      const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      if (titleMatch) {
+        pageTitle = titleMatch[1].replace(/<[^>]+>/g, "").trim();
+      }
+      const ogTitleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+                           html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+      if (ogTitleMatch) {
+        pageTitle = ogTitleMatch[1].trim() || pageTitle;
+      }
+
+      const ogSiteMatch = html.match(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']+)["']/i) ||
+                          html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:site_name["']/i);
+      if (ogSiteMatch) {
+        siteName = ogSiteMatch[1].trim();
+      }
+
+      const ogDescMatch = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i) ||
+                          html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i) ||
+                          html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i);
+      if (ogDescMatch) {
+        description = ogDescMatch[1].trim();
+      }
+    }
+
+    const rawCandidates: string[] = [];
+
+    if (html) {
+      // 1. og:image & twitter:image
+      const ogImgMatches = [...html.matchAll(/<meta[^>]+(?:property|name)=["'](?:og|twitter):image(?::src)?["'][^>]+content=["']([^"']+)["']/gi)];
+      for (const m of ogImgMatches) {
+        if (m[1]?.trim()) rawCandidates.push(m[1].trim());
+      }
+
+      // 2. img tags (prefer high-res srcset / daumcdn over direct kakaocdn)
+      const imgTagMatches = [...html.matchAll(/<img[^>]+>/gi)];
+      for (const m of imgTagMatches) {
+        const tag = m[0];
+        const srcAttr = tag.match(/(?:src|data-src|data-original|data-lazy-src|data-actualsrc)=["']([^"']+)["']/i)?.[1]?.trim();
+        const srcsetAttr = tag.match(/srcset=["']([^"']+)["']/i)?.[1]?.trim();
+
+        let preferredUrl = "";
+
+        if (srcsetAttr) {
+          const candidates = srcsetAttr.split(",").map((c) => c.trim().split(/\s+/)[0]);
+          const daumThumb = candidates.find((c) => c.includes("daumcdn.net/thumb/") || c.includes("daumcdn.net"));
+          if (daumThumb) {
+            preferredUrl = daumThumb;
+          } else if (candidates[0]) {
+            preferredUrl = candidates[0];
+          }
+        }
+
+        if (!preferredUrl && srcAttr) {
+          preferredUrl = srcAttr;
+        }
+
+        if (preferredUrl) {
+          rawCandidates.push(preferredUrl);
+        }
+      }
+
+      // 3. source tags
+      const sourceTagMatches = [...html.matchAll(/<source[^>]+srcset=["']([^"']+)["']/gi)];
+      for (const m of sourceTagMatches) {
+        const candidates = m[1].split(",");
+        for (const cand of candidates) {
+          const parts = cand.trim().split(/\s+/);
+          if (parts[0]) rawCandidates.push(parts[0]);
+        }
+      }
+
+      // 4. background-image
+      const bgMatches = [...html.matchAll(/background-image:\s*url\((?:["'])?([^"'\)]+)(?:["'])?\)/gi)];
+      for (const m of bgMatches) {
+        if (m[1]?.trim()) rawCandidates.push(m[1].trim());
+      }
+    }
+
+    const validImages: string[] = [];
+    const seen = new Set<string>();
+
+    const junkKeywords = [
+      "doubleclick", "googlesyndication", "googleadservices", "adservice", "adnxs",
+      "adplan", "banner", "pixel", "tracker", "analytics", "stat.gif", "blank.gif",
+      "spacer.gif", "cleardot", "favicon", "1x1", "2x2", "3x3", "badge", "btn_", "button",
+      "icon_", "ic_", "share_", "facebook", "twitter", "kakao_share", "naver_share",
+      "profile_default", "avatar_default", "comment_", "emoticon", "sticker", "ad_banner",
+      "post_ad", "advertisement", "pagead", "tracking", "beacon"
+    ];
+
+    for (let raw of rawCandidates) {
+      let absUrl = "";
+      try {
+        if (raw.startsWith("data:")) {
+          if (raw.length < 500) continue;
+          absUrl = raw;
+        } else if (raw.startsWith("//")) {
+          absUrl = baseUrl.protocol + raw;
+        } else {
+          absUrl = new URL(raw, baseUrl.href).href;
+        }
+      } catch {
+        continue;
+      }
+
+      absUrl = absUrl.replace(/&amp;/g, "&");
+
+      const lower = absUrl.toLowerCase();
+
+      // Skip SVG, ICO or small tracking GIFs
+      if (lower.endsWith(".svg") || lower.includes("image/svg+xml") || lower.endsWith(".ico")) continue;
+      if (lower.endsWith(".gif") && (lower.includes("pixel") || lower.includes("blank") || lower.includes("stat"))) continue;
+
+      // Filter out small sidebar/footer thumbnails from Tistory / Daum
+      if (lower.includes("thumb/c58x58") || lower.includes("thumb/c176x120") || lower.includes("thumb/c100x100")) {
+        continue;
+      }
+
+      // Naver blog image quality boost (e.g. ?type=w80 -> ?type=w966)
+      if (lower.includes("postfiles.pstatic.net") || lower.includes("blogfiles.naver.net")) {
+        absUrl = absUrl.replace(/\?type=w\d+/i, "?type=w966");
+      }
+
+      const isJunk = junkKeywords.some((kw) => lower.includes(kw));
+      if (isJunk) continue;
+
+      // Deduplication key
+      let dedupKey = absUrl;
+      if (absUrl.includes("fname=")) {
+        try {
+          const urlObj = new URL(absUrl);
+          const fname = urlObj.searchParams.get("fname");
+          if (fname) {
+            dedupKey = fname.split("?")[0];
+          }
+        } catch {}
+      } else {
+        dedupKey = absUrl.split("?")[0];
+      }
+
+      if (seen.has(dedupKey)) continue;
+      seen.add(dedupKey);
+
+      validImages.push(absUrl);
+    }
+
+    if (validImages.length === 0) {
+      throw new Error("해당 웹페이지/블로그에서 추출 가능한 이미지를 찾지 못했습니다. URL을 확인하거나 공개된 페이지인지 확인해주세요.");
+    }
+
+    if (!pageTitle) {
+      pageTitle = baseUrl.hostname + " 이미지 모음";
+    }
+
+    const webImageInfo = {
+      pageTitle,
+      siteName: siteName || baseUrl.hostname,
+      pageUrl: targetUrl,
+      description,
+      imageUrls: validImages,
+      totalExtractedCount: validImages.length,
+    };
+
+    let screenshotBuffer: Buffer;
+    try {
+      screenshotBuffer = await captureWebPageCard(pageTitle, siteName || baseUrl.hostname, description, validImages, theme);
+    } catch (e) {
+      console.warn("captureWebPageCard failed:", e);
+      screenshotBuffer = Buffer.from("");
+    }
+
+    const hostClean = baseUrl.hostname.replace(/[^a-zA-Z0-9]/g, "_");
+    return {
+      webImageInfo,
+      screenshotBuffer,
+      normalizedUrl: targetUrl,
+      postId: `${hostClean}_${Date.now().toString().slice(-6)}`,
+    };
   }
 
   // Animated GIF Conversion Endpoint using pre-downloaded video & native ffmpeg
@@ -3089,10 +3732,61 @@ async function startServer() {
     }
   });
 
+  // Batch Image Download ZIP Proxy Endpoint
+  app.post("/api/download-zip", async (req, res) => {
+    const { imageUrls, zipFilename, referer } = req.body;
+
+    if (!imageUrls || !Array.isArray(imageUrls) || imageUrls.length === 0) {
+      return res.status(400).send("imageUrls array is required");
+    }
+
+    try {
+      const JSZip = (await import("jszip")).default;
+      const zip = new JSZip();
+      const filename = (zipFilename as string) || "extracted-images.zip";
+
+      const fetchPromises = imageUrls.slice(0, 100).map(async (url: string, index: number) => {
+        try {
+          const response = await fetch(url, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              "Referer": referer || url,
+            },
+          });
+          if (response.ok) {
+            const arrayBuffer = await response.arrayBuffer();
+            const contentType = response.headers.get("content-type") || "";
+            let ext = "jpg";
+            if (contentType.includes("png") || url.toLowerCase().includes(".png")) ext = "png";
+            else if (contentType.includes("webp") || url.toLowerCase().includes(".webp")) ext = "webp";
+            else if (contentType.includes("gif") || url.toLowerCase().includes(".gif")) ext = "gif";
+
+            zip.file(`image_${String(index + 1).padStart(3, "0")}.${ext}`, arrayBuffer);
+          }
+        } catch (err) {
+          console.warn(`Failed to fetch image for zip (${url}):`, err);
+        }
+      });
+
+      await Promise.all(fetchPromises);
+
+      const zipContent = await zip.generateAsync({ type: "nodebuffer" });
+
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(filename)}"`);
+      res.setHeader("Content-Length", zipContent.length);
+      res.send(zipContent);
+    } catch (e: any) {
+      console.error("Failed to generate zip file:", e);
+      res.status(500).send("Error generating zip archive");
+    }
+  });
+
   // Direct Image Download Proxy Endpoint
   app.get("/api/download-image", async (req, res) => {
     const imageUrl = req.query.url as string;
-    const filename = (req.query.filename as string) || "telegram-image.jpg";
+    const filename = (req.query.filename as string) || "extracted-image.jpg";
+    const referer = (req.query.referer as string) || imageUrl;
 
     if (!imageUrl) {
       return res.status(400).send("Image URL is required");
@@ -3100,7 +3794,10 @@ async function startServer() {
 
     try {
       const response = await fetch(imageUrl, {
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Referer": referer,
+        }
       });
 
       if (!response.ok) {
@@ -3146,8 +3843,10 @@ async function startServer() {
           } else {
             targetPlatform = "youtube_thumb";
           }
+        } else if (lowercaseUrl.startsWith("http://") || lowercaseUrl.startsWith("https://") || lowercaseUrl.includes(".")) {
+          targetPlatform = "web_image";
         } else {
-          return res.status(400).json({ error: "자동 감지할 수 없는 URL 형식입니다. 올바른 소셜 미디어 주소를 입력하거나 플랫폼을 명시해주세요." });
+          return res.status(400).json({ error: "자동 감지할 수 없는 URL 형식입니다. 올바른 주소를 입력하거나 플랫폼을 명시해주세요." });
         }
       }
 
@@ -3157,12 +3856,20 @@ async function startServer() {
       let title = "";
       let videoInfo: any = undefined;
       let imageInfo: any = undefined;
+      let webImageInfo: any = undefined;
 
       const protocol = req.headers["x-forwarded-proto"] || "https";
       const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:3000";
       const hostUrl = `${protocol}://${host}`;
 
-      if (targetPlatform === "x_video") {
+      if (targetPlatform === "web_image") {
+        const result = await extractWebImages(url, selectedTheme);
+        buffer = result.screenshotBuffer;
+        webImageInfo = result.webImageInfo;
+        finalUrl = result.normalizedUrl;
+        finalPostId = result.postId;
+        title = result.webImageInfo.pageTitle;
+      } else if (targetPlatform === "x_video") {
         const result = await extractXVideoMedia(url, selectedTheme);
         buffer = result.screenshotBuffer;
         videoInfo = result.videoInfo;
@@ -3215,7 +3922,8 @@ async function startServer() {
         title: title || undefined,
         platform: targetPlatform,
         videoInfo,
-        imageInfo
+        imageInfo,
+        webImageInfo
       });
     } catch (err: any) {
       console.error("[Screenshot Error]", err);

@@ -1,5 +1,5 @@
 import React from "react";
-import { Trash2, Download, Copy, ExternalLink, Calendar, Twitter, Youtube, Send, Image, Video } from "lucide-react";
+import { Trash2, Download, Copy, ExternalLink, Calendar, Twitter, Youtube, Send, Image, Video, Globe } from "lucide-react";
 import { ScreenshotHistoryItem } from "../types";
 
 interface HistoryPanelProps {
@@ -45,6 +45,8 @@ export default function HistoryPanel({
         return <Video className="w-3.5 h-3.5 text-teal-500" />;
       case "telegram_image":
         return <Image className="w-3.5 h-3.5 text-emerald-500" />;
+      case "web_image":
+        return <Globe className="w-3.5 h-3.5 text-amber-500" />;
       default:
         return null;
     }
@@ -66,6 +68,8 @@ export default function HistoryPanel({
         return "TG Video";
       case "telegram_image":
         return "TG Image";
+      case "web_image":
+        return "Web/Blog";
       default:
         return platform;
     }
