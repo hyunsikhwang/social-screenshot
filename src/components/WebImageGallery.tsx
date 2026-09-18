@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { Download, Check, Copy, CheckSquare, Square, Eye, ExternalLink, Globe, Layers, ArrowDownToLine, Sparkles, X } from "lucide-react";
 import { WebImageMediaInfo } from "../types";
+import { getTimestampStr } from "../utils/timestamp";
 
 interface WebImageGalleryProps {
   webImageInfo: WebImageMediaInfo;
@@ -57,12 +58,14 @@ export default function WebImageGallery({ webImageInfo, imageUrl, postId }: WebI
 
     setIsZipping(true);
     try {
+      const timestamp = getTimestampStr();
+      const zipFilename = `web-images-${postId}-${timestamp}.zip`;
       const response = await fetch("/api/download-zip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           imageUrls: urlsToDownload,
-          zipFilename: `web-images-${postId}.zip`,
+          zipFilename,
           referer: webImageInfo.pageUrl,
         }),
       });
@@ -75,7 +78,7 @@ export default function WebImageGallery({ webImageInfo, imageUrl, postId }: WebI
       const downloadUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = downloadUrl;
-      a.download = `web-images-${postId}.zip`;
+      a.download = zipFilename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -305,15 +308,21 @@ export default function WebImageGallery({ webImageInfo, imageUrl, postId }: WebI
 
                   {/* Action Bar */}
                   <div className="grid grid-cols-2 gap-1.5 text-xs pt-1">
-                    <a
-                      href={`/api/download-image?url=${encodeURIComponent(imgUrl)}&filename=${encodeURIComponent(`web-image-${postId}-${idx + 1}.jpg`)}&referer=${encodeURIComponent(webImageInfo.pageUrl)}`}
-                      download={`web-image-${postId}-${idx + 1}.jpg`}
-                      onClick={(e) => e.stopPropagation()}
-                      className="py-1.5 px-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg text-[11px] flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>다운로드</span>
-                    </a>
+                    {(() => {
+                      const timestamp = getTimestampStr();
+                      const imageFilename = `web-image-${postId}-${idx + 1}-${timestamp}.jpg`;
+                      return (
+                        <a
+                          href={`/api/download-image?url=${encodeURIComponent(imgUrl)}&filename=${encodeURIComponent(imageFilename)}&referer=${encodeURIComponent(webImageInfo.pageUrl)}`}
+                          download={imageFilename}
+                          onClick={(e) => e.stopPropagation()}
+                          className="py-1.5 px-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg text-[11px] flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>다운로드</span>
+                        </a>
+                      );
+                    })()}
 
                     <button
                       type="button"
@@ -385,14 +394,20 @@ export default function WebImageGallery({ webImageInfo, imageUrl, postId }: WebI
             </div>
 
             <div className="flex justify-end gap-2 pt-1">
-              <a
-                href={`/api/download-image?url=${encodeURIComponent(lightboxUrl)}&filename=extracted-image.jpg&referer=${encodeURIComponent(webImageInfo.pageUrl)}`}
-                download="extracted-image.jpg"
-                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md"
-              >
-                <Download className="w-4 h-4" />
-                <span>원본 다운로드</span>
-              </a>
+              {(() => {
+                const timestamp = getTimestampStr();
+                const imageFilename = `web-extracted-image-${timestamp}.jpg`;
+                return (
+                  <a
+                    href={`/api/download-image?url=${encodeURIComponent(lightboxUrl)}&filename=${encodeURIComponent(imageFilename)}&referer=${encodeURIComponent(webImageInfo.pageUrl)}`}
+                    download={imageFilename}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>원본 다운로드</span>
+                  </a>
+                );
+              })()}
             </div>
           </div>
         </div>

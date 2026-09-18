@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { Download, Check, Copy, CheckSquare, Square, Eye, Layers, ArrowDownToLine, X, Image, Camera } from "lucide-react";
 import { ImageMediaInfo } from "../types";
+import { getTimestampStr } from "../utils/timestamp";
 
 interface TelegramImageGalleryProps {
   imageInfo: ImageMediaInfo;
@@ -57,12 +58,14 @@ export default function TelegramImageGallery({ imageInfo, imageUrl, postId }: Te
 
     setIsZipping(true);
     try {
+      const timestamp = getTimestampStr();
+      const zipFilename = `telegram-images-${postId}-${timestamp}.zip`;
       const response = await fetch("/api/download-zip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           imageUrls: urlsToDownload,
-          zipFilename: `telegram-images-${postId}.zip`,
+          zipFilename,
           referer: "https://t.me",
         }),
       });
@@ -75,7 +78,7 @@ export default function TelegramImageGallery({ imageInfo, imageUrl, postId }: Te
       const downloadUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = downloadUrl;
-      a.download = `telegram-images-${postId}.zip`;
+      a.download = zipFilename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -308,15 +311,21 @@ export default function TelegramImageGallery({ imageInfo, imageUrl, postId }: Te
 
                   {/* Action Bar */}
                   <div className="grid grid-cols-2 gap-1.5 text-xs pt-1">
-                    <a
-                      href={`/api/download-image?url=${encodeURIComponent(imgUrl)}&filename=${encodeURIComponent(`telegram-image-${postId}-${idx + 1}.jpg`)}&referer=${encodeURIComponent("https://t.me")}`}
-                      download={`telegram-image-${postId}-${idx + 1}.jpg`}
-                      onClick={(e) => e.stopPropagation()}
-                      className="py-1.5 px-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-[11px] flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>다운로드</span>
-                    </a>
+                    {(() => {
+                      const timestamp = getTimestampStr();
+                      const imageFilename = `telegram-image-${postId}-${idx + 1}-${timestamp}.jpg`;
+                      return (
+                        <a
+                          href={`/api/download-image?url=${encodeURIComponent(imgUrl)}&filename=${encodeURIComponent(imageFilename)}&referer=${encodeURIComponent("https://t.me")}`}
+                          download={imageFilename}
+                          onClick={(e) => e.stopPropagation()}
+                          className="py-1.5 px-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-[11px] flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>다운로드</span>
+                        </a>
+                      );
+                    })()}
 
                     <button
                       type="button"
@@ -388,14 +397,20 @@ export default function TelegramImageGallery({ imageInfo, imageUrl, postId }: Te
             </div>
 
             <div className="flex justify-end gap-2 pt-1">
-              <a
-                href={`/api/download-image?url=${encodeURIComponent(lightboxUrl)}&filename=telegram-extracted-image.jpg&referer=${encodeURIComponent("https://t.me")}`}
-                download="telegram-extracted-image.jpg"
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md"
-              >
-                <Download className="w-4 h-4" />
-                <span>원본 다운로드</span>
-              </a>
+              {(() => {
+                const timestamp = getTimestampStr();
+                const imageFilename = `telegram-extracted-image-${timestamp}.jpg`;
+                return (
+                  <a
+                    href={`/api/download-image?url=${encodeURIComponent(lightboxUrl)}&filename=${encodeURIComponent(imageFilename)}&referer=${encodeURIComponent("https://t.me")}`}
+                    download={imageFilename}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>원본 다운로드</span>
+                  </a>
+                );
+              })()}
             </div>
           </div>
         </div>

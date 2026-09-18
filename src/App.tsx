@@ -19,6 +19,9 @@ import {
   Image,
   Video,
   Film,
+  Link2,
+  X,
+  ClipboardPaste,
 } from "lucide-react";
 
 import { Platform, Theme, ScreenshotHistoryItem, VideoMediaInfo, ImageMediaInfo, WebImageMediaInfo } from "./types";
@@ -27,6 +30,7 @@ import PresetUrls from "./components/PresetUrls";
 import HistoryPanel from "./components/HistoryPanel";
 import WebImageGallery from "./components/WebImageGallery";
 import TelegramImageGallery from "./components/TelegramImageGallery";
+import { getTimestampStr, addTimestampToFilename } from "./utils/timestamp";
 
 // Gradient configurations for the backdrop preview
 const GRADIENTS = [
@@ -85,6 +89,7 @@ const convertSvgToPng = (svgDataUrl: string): Promise<string> => {
       // Extract explicit design height and width attributes from the SVG text as a solid fallback
       let width = 600;
       let height = 400;
+      let measuredExactHeight: number | null = null;
       try {
         const parser = new DOMParser();
         const doc = parser.parseFromString(svgText, "image/svg+xml");
@@ -106,6 +111,52 @@ const convertSvgToPng = (svgDataUrl: string): Promise<string> => {
           width = parseFloat(svgElement.getAttribute("width") || "600");
           height = parseFloat(svgElement.getAttribute("height") || "400");
         }
+
+        // If SVG contains an HTML card inside foreignObject, measure exact pixel height in the DOM
+        const foreignObject = doc.querySelector("foreignObject");
+        const cardElement = foreignObject?.firstElementChild as HTMLElement | null;
+        if (cardElement && typeof document !== "undefined") {
+          try {
+            const measureContainer = document.createElement("div");
+            measureContainer.style.position = "fixed";
+            measureContainer.style.left = "-99999px";
+            measureContainer.style.top = "0";
+            measureContainer.style.width = `${width}px`;
+            measureContainer.style.visibility = "hidden";
+            measureContainer.style.pointerEvents = "none";
+            measureContainer.style.zIndex = "-9999";
+
+            const clone = cardElement.cloneNode(true) as HTMLElement;
+            clone.style.height = "auto";
+            clone.style.minHeight = "auto";
+            measureContainer.appendChild(clone);
+            document.body.appendChild(measureContainer);
+
+            const boundingBox = clone.getBoundingClientRect();
+            const measured = Math.ceil(boundingBox.height);
+            document.body.removeChild(measureContainer);
+
+            if (measured > 40) {
+              measuredExactHeight = measured;
+              height = measured;
+
+              if (svgElement) {
+                svgElement.setAttribute("height", measured.toString());
+                svgElement.setAttribute("viewBox", `0 0 ${width} ${measured}`);
+              }
+              if (foreignObject) {
+                foreignObject.setAttribute("height", measured.toString());
+              }
+              cardElement.style.height = "auto";
+              cardElement.style.minHeight = "auto";
+
+              const serializer = new XMLSerializer();
+              svgText = serializer.serializeToString(doc);
+            }
+          } catch (mErr) {
+            console.warn("DOM measurement of SVG card height skipped:", mErr);
+          }
+        }
       } catch (e) {
         console.warn("Failed to parse SVG dimensions for fallback rendering:", e);
       }
@@ -119,7 +170,7 @@ const convertSvgToPng = (svgDataUrl: string): Promise<string> => {
           const scale = 2; // High-DPI scale for ultra-crisp output matching natural rendering quality!
           
           const finalWidth = img.naturalWidth || width || img.width || 600;
-          const finalHeight = img.naturalHeight || height || img.height || 400;
+          const finalHeight = measuredExactHeight || img.naturalHeight || height || img.height || 400;
 
           canvas.width = finalWidth * scale;
           canvas.height = finalHeight * scale;
@@ -181,10 +232,13 @@ export default function App() {
     videoInfo?: VideoMediaInfo;
     imageInfo?: ImageMediaInfo;
     webImageInfo?: WebImageMediaInfo;
+    rawThumbnailUrl?: string;
+    authorName?: string;
   } | null>(null);
 
   // Copy to clipboard status
   const [copyStatus, setCopyStatus] = useState<"idle" | "loading" | "copied" | "error">("idle");
+  const [rawThumbCopied, setRawThumbCopied] = useState<boolean>(false);
 
   // Display Modes
   const [videoDisplayMode, setVideoDisplayMode] = useState<"gif" | "player">("gif");
@@ -244,7 +298,7 @@ export default function App() {
       setGifResult({
         gifUrl: data.gifUrl,
         gifDataUrl: data.gifDataUrl,
-        filename: `video-${activeScreenshot?.postId || Date.now()}.gif`,
+        filename: addTimestampToFilename(`video-${activeScreenshot?.postId || "gif"}.gif`),
         sizeMb: data.sizeMb,
       });
     } catch (e: any) {
@@ -454,6 +508,8 @@ export default function App() {
         videoInfo: data.videoInfo,
         imageInfo: data.imageInfo,
         webImageInfo: data.webImageInfo,
+        rawThumbnailUrl: data.rawThumbnailUrl,
+        authorName: data.authorName,
       };
 
       setActiveScreenshot(newScreenshot);
@@ -471,6 +527,7 @@ export default function App() {
         videoInfo: data.videoInfo,
         imageInfo: data.imageInfo,
         webImageInfo: data.webImageInfo,
+        rawThumbnailUrl: data.rawThumbnailUrl,
       };
 
       const updatedHistory = [historyItem, ...history.filter((h) => h.url !== url.trim())].slice(0, 6);
@@ -496,6 +553,7 @@ export default function App() {
       videoInfo: item.videoInfo,
       imageInfo: item.imageInfo,
       webImageInfo: item.webImageInfo,
+      rawThumbnailUrl: item.rawThumbnailUrl,
     });
     setError(null);
     setCopyStatus("idle");
@@ -648,6 +706,20 @@ export default function App() {
     }
   };
 
+  // Quick paste helper from clipboard
+  const handlePasteFromClipboard = async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          handleUrlChange(text.trim());
+        }
+      }
+    } catch (e) {
+      console.warn("Could not read clipboard:", e);
+    }
+  };
+
   const activeGradientClass = GRADIENTS.find((g) => g.id === selectedGradient)?.class || GRADIENTS[0].class;
 
   return (
@@ -696,32 +768,35 @@ export default function App() {
                 스크린샷 생성기
               </h2>
               <p className="text-xs text-slate-500">
-                원하는 소셜 미디어 플랫폼과 주소를 입력해주세요.
+                원하는 소셜 미디어 포스트 URL을 입력하고 스크린샷을 생성하세요.
               </p>
             </div>
 
             <form onSubmit={handleCapture} className="space-y-6">
-              {/* Platform Switcher */}
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-                  1. 플랫폼 선택
-                </label>
-                <PlatformTabs activePlatform={platform} onChange={setPlatform} />
-              </div>
+              {/* 1. URL Input Box (Primary focus & top position) */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <Link2 className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>1. 포스트 URL 주소</span>
+                  </label>
+                  <span className="text-[11px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200/80 rounded-md px-2 py-0.5 flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-indigo-500" />
+                    자동 감지 지원
+                  </span>
+                </div>
 
-              {/* URL Input Box */}
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-                  2. 포스트 URL 주소
-                </label>
-                <div className="relative">
+                <div className="relative group">
+                  <div className="absolute left-3.5 top-1/2 -translate-y-1/2 flex items-center pointer-events-none text-slate-400 group-focus-within:text-indigo-600 transition-colors">
+                    <Link2 className="w-4 h-4" />
+                  </div>
                   <input
                     type="url"
                     value={url}
                     onChange={(e) => handleUrlChange(e.target.value)}
                     placeholder={
                       platform === "auto"
-                        ? "여기에 소셜 미디어 링크를 붙여넣으세요 (자동 감지)"
+                        ? "소셜 미디어 링크를 붙여넣으세요 (X, YouTube, TG 자동 감지)"
                         : platform === "x"
                         ? "https://x.com/username/status/1234567890"
                         : platform === "x_video"
@@ -736,20 +811,43 @@ export default function App() {
                         ? "https://t.me/telegram/200 (Telegram 이미지)"
                         : "https://telegram.me/s/channel/123 (또는 telegram.me/channel/123)"
                     }
-                    className="w-full bg-slate-50 border border-slate-200 text-slate-900 placeholder-slate-400 rounded-xl py-3 pl-4 pr-10 text-sm focus:outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-500/15 transition-all font-mono"
+                    className="w-full bg-slate-50/70 hover:bg-white focus:bg-white border-2 border-slate-200/90 hover:border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 text-slate-900 placeholder-slate-400 rounded-xl py-3 pl-10 pr-28 text-sm transition-all font-mono shadow-2xs"
                     required
                   />
-                  <div className="absolute right-3.5 top-3.5 text-slate-400">
-                    {(() => {
-                      const det = detectPlatform(url);
-                      const current = platform === "auto" ? det : platform;
-                      if (current === "x" || current === "x_video") return <Twitter className="w-4 h-4 text-sky-500" />;
-                      if (current === "youtube") return <Youtube className="w-4 h-4 text-rose-500" />;
-                      if (current === "youtube_thumb") return <Image className="w-4 h-4 text-red-500" />;
-                      if (current === "telegram" || current === "telegram_video") return <Send className="w-4 h-4 text-cyan-500" />;
-                      if (current === "telegram_image") return <Image className="w-4 h-4 text-emerald-500" />;
-                      return <Sparkles className="w-4 h-4 text-violet-500 animate-pulse" />;
-                    })()}
+                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                    {url ? (
+                      <button
+                        type="button"
+                        onClick={() => handleUrlChange("")}
+                        title="입력 내용 지우기"
+                        className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handlePasteFromClipboard}
+                        title="클립보드에서 붙여넣기"
+                        className="flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-indigo-600 bg-slate-100/80 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-md px-2 py-1 transition-all cursor-pointer shadow-2xs"
+                      >
+                        <ClipboardPaste className="w-3 h-3" />
+                        <span>붙여넣기</span>
+                      </button>
+                    )}
+                    <div className="w-[1px] h-4 bg-slate-200 mx-0.5" />
+                    <div className="flex items-center justify-center w-6 h-6">
+                      {(() => {
+                        const det = detectPlatform(url);
+                        const current = platform === "auto" ? det : platform;
+                        if (current === "x" || current === "x_video") return <Twitter className="w-4 h-4 text-sky-500" />;
+                        if (current === "youtube") return <Youtube className="w-4 h-4 text-rose-500" />;
+                        if (current === "youtube_thumb") return <Image className="w-4 h-4 text-red-500" />;
+                        if (current === "telegram" || current === "telegram_video") return <Send className="w-4 h-4 text-cyan-500" />;
+                        if (current === "telegram_image") return <Image className="w-4 h-4 text-emerald-500" />;
+                        return <Sparkles className="w-4 h-4 text-slate-300" />;
+                      })()}
+                    </div>
                   </div>
                 </div>
 
@@ -759,10 +857,10 @@ export default function App() {
                   const det = detectPlatform(url);
                   if (!det) return null;
                   return (
-                    <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-violet-700 bg-violet-50/80 border border-violet-200/80 rounded-xl px-3 py-2 w-fit mt-1.5 animate-fade-in shadow-xs">
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-violet-700 bg-violet-50/80 border border-violet-200/80 rounded-xl px-3 py-2 w-fit mt-1 animate-fade-in shadow-xs">
                       <div className="flex items-center gap-1.5">
                         <Sparkles className="w-3.5 h-3.5 text-violet-500" />
-                        <span>플랫폼 감지 결과:</span>
+                        <span>감지된 플랫폼:</span>
                         <span className="font-bold underline decoration-violet-300">
                           {det === "x" && "X (Twitter)"}
                           {det === "youtube" && "YouTube 커뮤니티 포스트"}
@@ -811,8 +909,27 @@ export default function App() {
                 <PresetUrls platform={platform} onSelect={handleUrlChange} />
               </div>
 
+              {/* 2. Platform Switcher (Manual override) */}
+              <div className="space-y-2 pt-1 border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+                    2. 플랫폼 선택 (수동 변경)
+                  </label>
+                  {platform !== "auto" && (
+                    <button
+                      type="button"
+                      onClick={() => setPlatform("auto")}
+                      className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer"
+                    >
+                      자동 감지(Auto)로 리셋
+                    </button>
+                  )}
+                </div>
+                <PlatformTabs activePlatform={platform} onChange={setPlatform} />
+              </div>
+
               {/* Layout Customization (Theme & Background) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1 border-t border-slate-100">
                 {/* Captured Theme Scheme */}
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
@@ -1235,15 +1352,20 @@ export default function App() {
                   /* Image Action Controls */
                   <div className="space-y-3">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <a
-                        href={`/api/download-image?url=${encodeURIComponent(activeScreenshot.imageInfo.primaryImageUrl)}&filename=${encodeURIComponent(`telegram-image-${activeScreenshot.postId}.jpg`)}`}
-                        download={`telegram-image-${activeScreenshot.postId}.jpg`}
-                        id="download-primary-image-btn"
-                        className="flex items-center justify-center gap-2 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/20 text-xs tracking-wide transition-all cursor-pointer"
-                      >
-                        <Download className="w-4 h-4" />
-                        🖼️ 메인 이미지 (HD) 고화질 다운로드
-                      </a>
+                      {(() => {
+                        const imgFilename = addTimestampToFilename(`telegram-image-${activeScreenshot.postId}.jpg`);
+                        return (
+                          <a
+                            href={`/api/download-image?url=${encodeURIComponent(activeScreenshot.imageInfo.primaryImageUrl)}&filename=${encodeURIComponent(imgFilename)}`}
+                            download={imgFilename}
+                            id="download-primary-image-btn"
+                            className="flex items-center justify-center gap-2 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/20 text-xs tracking-wide transition-all cursor-pointer"
+                          >
+                            <Download className="w-4 h-4" />
+                            🖼️ 메인 이미지 (HD) 고화질 다운로드
+                          </a>
+                        );
+                      })()}
 
                       <button
                         id="copy-primary-image-url-btn"
@@ -1273,15 +1395,20 @@ export default function App() {
                   /* Video Action Controls & Animated GIF Converter */
                   <div className="space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <a
-                        href={`/api/download-video?url=${encodeURIComponent(activeScreenshot.videoInfo.videoUrl)}&filename=${encodeURIComponent(`video-${activeScreenshot.postId}.mp4`)}`}
-                        download={`video-${activeScreenshot.postId}.mp4`}
-                        id="download-video-mp4-btn"
-                        className="flex items-center justify-center gap-2 py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold rounded-xl shadow-lg shadow-indigo-600/20 text-xs tracking-wide transition-all cursor-pointer"
-                      >
-                        <Download className="w-4 h-4" />
-                        🎬 동영상 (MP4) 고화질 다운로드
-                      </a>
+                      {(() => {
+                        const vidFilename = addTimestampToFilename(`video-${activeScreenshot.postId}.mp4`);
+                        return (
+                          <a
+                            href={`/api/download-video?url=${encodeURIComponent(activeScreenshot.videoInfo.videoUrl)}&filename=${encodeURIComponent(vidFilename)}`}
+                            download={vidFilename}
+                            id="download-video-mp4-btn"
+                            className="flex items-center justify-center gap-2 py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold rounded-xl shadow-lg shadow-indigo-600/20 text-xs tracking-wide transition-all cursor-pointer"
+                          >
+                            <Download className="w-4 h-4" />
+                            🎬 동영상 (MP4) 고화질 다운로드
+                          </a>
+                        );
+                      })()}
 
                       <button
                         id="copy-video-url-btn"
@@ -1524,7 +1651,7 @@ export default function App() {
                           <div className="flex gap-2 w-full max-w-xs">
                             <a
                               href={activeScreenshot.imageUrl}
-                              download={activeScreenshot.filename}
+                              download={addTimestampToFilename(activeScreenshot.filename)}
                               className="flex-1 py-2 text-center bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition-colors"
                             >
                               📥 카드 저장 (PNG)
@@ -1546,7 +1673,7 @@ export default function App() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <a
                       href={activeScreenshot.imageUrl}
-                      download={activeScreenshot.filename}
+                      download={addTimestampToFilename(activeScreenshot.filename)}
                       onClick={handleDownload}
                       id="download-clean-png-btn"
                       className="flex items-center justify-center gap-2 py-3 px-4 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/15 text-xs tracking-wide transition-all cursor-pointer"
@@ -1589,6 +1716,59 @@ export default function App() {
                         </>
                       )}
                     </button>
+                  </div>
+                )}
+
+                {/* YouTube HD Thumbnail Direct Download Card */}
+                {activeScreenshot.rawThumbnailUrl && (
+                  <div className="bg-red-50/70 border border-red-200/80 rounded-2xl p-4 space-y-3" id="youtube-hd-thumb-box">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-xs font-bold text-red-950">
+                        <svg className="w-4 h-4 text-red-600 fill-current" viewBox="0 0 24 24">
+                          <path d="M23.498 6.163a3.003 3.003 0 0 0-2.11-2.11C19.518 3.5 12 3.5 12 3.5s-7.518 0-9.388.553a3.003 3.003 0 0 0-2.11 2.11C0 8.033 0 12 0 12s0 3.967.502 5.837a3.003 3.003 0 0 0 2.11 2.11c1.87.553 9.388.553 9.388.553s7.518 0 9.388-.553a3.003 3.003 0 0 0 2.11-2.11C24 15.967 24 12 24 12s0-3.967-.502-5.837zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                        </svg>
+                        <span>유튜브 원본 썸네일 고화질(HD) 다운로드</span>
+                      </div>
+                      <span className="text-[10px] bg-red-100 text-red-700 font-bold px-2 py-0.5 rounded-full">
+                        HD / MAXRES (JPG)
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-red-800/80 leading-relaxed">
+                      카드 프레임 없이 유튜브 영상 원본 썸네일 이미지만 최고 해상도(최대 1080p)로 바로 다운로드하거나 원본 주소를 복사할 수 있습니다.
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                      <a
+                        href={`/api/download-image?url=${encodeURIComponent(activeScreenshot.rawThumbnailUrl)}&filename=${encodeURIComponent(addTimestampToFilename(`youtube-thumb-${activeScreenshot.postId}.jpg`))}`}
+                        download={addTimestampToFilename(`youtube-thumb-${activeScreenshot.postId}.jpg`)}
+                        id="download-raw-thumb-jpg-btn"
+                        className="flex items-center justify-center gap-2 py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs shadow-md shadow-red-600/20 transition-all cursor-pointer"
+                      >
+                        <Download className="w-4 h-4" />
+                        원본 썸네일 이미지 저장 (JPG)
+                      </a>
+                      <button
+                        type="button"
+                        id="copy-raw-thumb-url-btn"
+                        onClick={() => {
+                          navigator.clipboard.writeText(activeScreenshot.rawThumbnailUrl!);
+                          setRawThumbCopied(true);
+                          setTimeout(() => setRawThumbCopied(false), 2500);
+                        }}
+                        className="flex items-center justify-center gap-2 py-2.5 px-4 bg-white hover:bg-red-50 text-red-700 font-bold border border-red-200 rounded-xl text-xs shadow-xs transition-colors cursor-pointer"
+                      >
+                        {rawThumbCopied ? (
+                          <>
+                            <Check className="w-4 h-4 text-emerald-600" />
+                            <span className="text-emerald-700 font-bold">썸네일 링크 복사 완료!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4" />
+                            <span>썸네일 원본 주소 복사</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 )}
 

@@ -19,6 +19,16 @@ try {
 const __filename = resolvedFilename;
 const __dirname = resolvedDirname;
 
+function getTimestampString(date = new Date()): string {
+  const YYYY = date.getFullYear();
+  const MM = String(date.getMonth() + 1).padStart(2, "0");
+  const DD = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  const ss = String(date.getSeconds()).padStart(2, "0");
+  return `${YYYY}${MM}${DD}_${hh}${mm}${ss}`;
+}
+
 const getFfmpegBin = (): string => {
   if (ffmpegStatic && fs.existsSync(ffmpegStatic)) {
     return ffmpegStatic;
@@ -482,7 +492,7 @@ async function captureViaMicrolink(targetUrl: string, elementSelector: string, t
     `.replace(/\s+/g, " ").trim();
 
     params.append("styles", microlinkCss);
-  } else if ((targetUrl.includes("youtube.com") || targetUrl.includes("youtu.be")) && !targetUrl.includes("render-youtube-thumb")) {
+  } else if ((targetUrl.includes("youtube.com") || targetUrl.includes("youtu.be")) && !targetUrl.includes("render-youtube-thumb") && !targetUrl.includes("render-youtube-post")) {
     // Wait for ytd-backstage-post-renderer to fully load in Microlink's browser
     params.append("screenshot.waitFor", "ytd-backstage-post-renderer");
     params.append("screenshot.delay", "5000"); // Allow extra time for client-side API requests and custom font loading
@@ -534,6 +544,11 @@ async function captureViaMicrolink(targetUrl: string, elementSelector: string, t
     `.replace(/\s+/g, " ").trim();
     
     params.append("styles", youtubeCss);
+  } else if (targetUrl.includes("render-youtube-post")) {
+    params.append("screenshot.waitFor", "#youtube-post-card");
+    params.append("screenshot.delay", "1000");
+    params.append("viewport.width", "800");
+    params.append("viewport.height", "4000");
   } else if (targetUrl.includes("render-youtube-thumb")) {
     params.append("screenshot.waitFor", ".card");
     params.append("screenshot.delay", "2000");
@@ -854,15 +869,336 @@ async function captureXPost(postUrl: string, theme: "light" | "dark" = "light"):
   }
 }
 
+function generateYoutubePostHtmlCard(
+  channelName: string,
+  desc: string,
+  avatar: string,
+  theme: "light" | "dark" = "light",
+  publishedTime: string = "",
+  voteCount: string = "",
+  postImages: string[] = []
+): string {
+  const isDark = theme === "dark";
+  const bgColor = isDark ? "#1f1f1f" : "#ffffff";
+  const textColor = isDark ? "#f1f1f1" : "#0f0f0f";
+  const subTextColor = isDark ? "#aaaaaa" : "#606060";
+  const borderColor = isDark ? "#3f3f3f" : "#e5e5e5";
+
+  const escapeHtml = (str: string) => {
+    if (!str) return "";
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  };
+
+  const linkify = (text: string) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    return text.replace(urlRegex, (url) => {
+      return `<a href="${url}" style="color: #3ea6ff; text-decoration: none;" target="_blank">${url}</a>`;
+    });
+  };
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
+        
+        body {
+          margin: 0;
+          padding: 24px;
+          background: transparent;
+          display: flex;
+          justify-content: center;
+          align-items: flex-start;
+          min-height: 100vh;
+          box-sizing: border-box;
+          font-family: 'Pretendard', 'Noto Sans KR', sans-serif;
+        }
+
+        .card {
+          width: 580px;
+          max-width: 100%;
+          background: ${bgColor};
+          border: 1px solid ${borderColor};
+          border-radius: 20px;
+          padding: 20px 24px 18px 24px;
+          box-shadow: 0 12px 40px rgba(0, 0, 0, ${isDark ? "0.4" : "0.08"});
+          box-sizing: border-box;
+        }
+
+        .header {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+
+        .avatar {
+          width: 48px;
+          height: 48px;
+          border-radius: 50%;
+          object-fit: cover;
+          border: 1px solid ${borderColor};
+        }
+
+        .creator-info {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .creator-title-row {
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
+        }
+
+        .creator-name {
+          font-size: 16px;
+          font-weight: 700;
+          color: ${textColor};
+        }
+
+        .published-bullet {
+          font-size: 11px;
+          color: ${subTextColor};
+        }
+
+        .published-time {
+          font-size: 13px;
+          color: ${subTextColor};
+          font-weight: 400;
+        }
+
+        .post-badge {
+          font-size: 12px;
+          color: ${subTextColor};
+          margin-top: 2px;
+        }
+
+        .content {
+          font-size: 15px;
+          line-height: 1.6;
+          color: ${textColor};
+          white-space: pre-wrap;
+          word-break: break-word;
+        }
+
+        /* Post Images Styling */
+        .post-images-container {
+          margin-top: 16px;
+          border-radius: 16px;
+          overflow: hidden;
+          border: 1px solid ${borderColor};
+          box-sizing: border-box;
+        }
+
+        .post-image {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        /* Single image layout */
+        .single-image {
+          max-height: 480px;
+        }
+        .single-image .post-image {
+          max-height: 480px;
+          object-fit: contain;
+          background: ${isDark ? "#0f0f0f" : "#f9f9f9"};
+        }
+
+        /* Multi images layout */
+        .multi-images {
+          display: grid;
+          gap: 4px;
+          height: 320px;
+          background: ${isDark ? "#0f0f0f" : "#f9f9f9"};
+        }
+
+        .grid-2 {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .grid-3 {
+          grid-template-columns: 2fr 1fr;
+        }
+        .grid-3 .post-image-wrapper:nth-child(2) {
+          grid-column: 2;
+          grid-row: 1;
+        }
+        .grid-3 .post-image-wrapper:nth-child(3) {
+          grid-column: 2;
+          grid-row: 2;
+        }
+
+        .grid-4 {
+          grid-template-columns: 1fr 1fr;
+          grid-template-rows: 1fr 1fr;
+        }
+
+        .post-image-wrapper {
+          position: relative;
+          overflow: hidden;
+          height: 100%;
+        }
+
+        .more-images-overlay {
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0, 0, 0, 0.6);
+          color: #ffffff;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 20px;
+          font-weight: 700;
+        }
+
+        .footer {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          border-top: 1px solid ${borderColor};
+          padding-top: 12px;
+          margin-top: 16px;
+        }
+
+        .actions {
+          display: flex;
+          align-items: center;
+          gap: 18px;
+        }
+
+        .action-btn {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          color: ${textColor};
+          font-size: 13px;
+          font-weight: 500;
+        }
+
+        .action-icon {
+          width: 18px;
+          height: 18px;
+          color: ${isDark ? "#ffffff" : "#606060"};
+        }
+
+        .domain {
+          font-size: 11px;
+          font-weight: 500;
+          color: ${subTextColor};
+          font-family: monospace;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="card" id="youtube-post-card">
+        <div class="header">
+          ${avatar ? `<img class="avatar" src="${avatar}" />` : `<div class="avatar" style="background:#ef4444;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:18px;">YT</div>`}
+          <div class="creator-info">
+            <div class="creator-title-row">
+              <span class="creator-name">${escapeHtml(channelName)}</span>
+              ${publishedTime ? `<span class="published-bullet">•</span><span class="published-time">${escapeHtml(publishedTime)}</span>` : ""}
+            </div>
+            <span class="post-badge">YouTube Community Post</span>
+          </div>
+        </div>
+        <div class="content">${linkify(escapeHtml(desc))}</div>
+        
+        <!-- Render post images beautifully -->
+        ${postImages.length === 1 ? `
+          <div class="post-images-container single-image">
+            <img src="${postImages[0]}" class="post-image" />
+          </div>
+        ` : ""}
+
+        ${postImages.length > 1 ? `
+          <div class="post-images-container multi-images grid-${Math.min(postImages.length, 4)}">
+            ${postImages.slice(0, 4).map((img, idx) => `
+              <div class="post-image-wrapper">
+                <img src="${img}" class="post-image" />
+                ${postImages.length > 4 && idx === 3 ? `
+                  <div class="more-images-overlay">+${postImages.length - 4}</div>
+                ` : ""}
+              </div>
+            `).join("")}
+          </div>
+        ` : ""}
+
+        <div class="footer">
+          <div class="actions">
+            <div class="action-btn">
+              <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>
+              <span>${escapeHtml(voteCount || "0")}</span>
+            </div>
+            <div class="action-btn">
+              <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>
+            </div>
+            <div class="action-btn">
+              <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M14 9V5l7 7-7 7v-4.1c-5 0-8.5 1.6-11 5.1 1-5 4-10 11-11.1z"/></svg>
+            </div>
+          </div>
+          <span class="domain">youtube.com</span>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+async function captureCardHtmlWithPlaywright(htmlContent: string, selector: string, theme: "light" | "dark" = "light"): Promise<Buffer> {
+  const browser = await launchBrowser();
+  try {
+    const context = await browser.newContext({
+      viewport: { width: 1000, height: 1000 },
+      deviceScaleFactor: 2,
+      colorScheme: theme,
+      locale: "ko-KR",
+    });
+    const page = await context.newPage();
+    await page.setContent(htmlContent);
+    try {
+      await page.waitForLoadState("networkidle", { timeout: 4000 });
+    } catch (e) {
+      // Font or external asset loading timeout should not prevent screenshot
+    }
+    await page.waitForTimeout(300);
+    const cardElement = page.locator(selector);
+    const box = await cardElement.boundingBox();
+    if (box && box.height > 0) {
+      const dynamicHeight = Math.max(1000, Math.min(Math.ceil(box.height) + 200, 15000));
+      await page.setViewportSize({ width: 1000, height: dynamicHeight });
+      await page.waitForTimeout(150);
+    }
+    const buffer = await cardElement.screenshot({ type: "png", omitBackground: true });
+    return buffer;
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
 async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "light", hostUrl?: string): Promise<Buffer> {
-  // Normalize mobile youtube domain to standard desktop youtube domain
+  // Normalize mobile youtube domain or bare youtube domain to standard www.youtube.com domain
   let targetUrl = postUrl.trim();
   if (!/^https?:\/\//i.test(targetUrl)) {
     targetUrl = `https://${targetUrl}`;
   }
   try {
     const parsed = new URL(targetUrl);
-    if (parsed.hostname.toLowerCase() === "m.youtube.com") {
+    if (parsed.hostname.toLowerCase() === "m.youtube.com" || parsed.hostname.toLowerCase() === "youtube.com") {
       parsed.hostname = "www.youtube.com";
       targetUrl = parsed.toString();
     }
@@ -892,7 +1228,7 @@ async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "li
 
     try {
       try {
-        await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+        await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 25000 });
       } catch (e) {
         // Ignore navigation timeout if some parts loaded
       }
@@ -900,7 +1236,12 @@ async function captureYoutubePost(postUrl: string, theme: "light" | "dark" = "li
       const cssContent = `@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap');
 
-ytd-masthead, #masthead-container { display: none !important; visibility: hidden !important; height: 0 !important; }
+ytd-masthead, #masthead-container, #guide, ytd-mini-guide-renderer, #comments, #sections, #sidebar, #meta, #footer, tp-yt-paper-spinner, tp-yt-paper-spinner-lite, #spinner, .spinner-container, yt-page-navigation-progress, #progress, .ytp-large-play-button, .ytp-cued-thumbnail-overlay, ytd-popup-container, iron-overlay-backdrop, .ytp-watermark, ytd-yoodle-renderer, ytd-topbar-logo-renderer, #logo, .yt-spec-touch-feedback-shape {
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  opacity: 0 !important;
+}
 ytd-app #page-manager.ytd-app { margin-top: 0 !important; }
 * { font-family: 'Pretendard', 'Noto Sans KR', sans-serif !important; }
 
@@ -929,7 +1270,7 @@ ytd-backstage-post-renderer a, ytd-backstage-post-renderer span[class*="hashtag"
 }
 
 /* Force-expand text containers and formatters to prevent truncation */
-#content, #content-text, #text, .content, .text, ytd-text-expander, yt-formatted-string {
+#content, #content-text, #text, .content, .text, ytd-text-expander, yt-formatted-string, .yt-core-attributed-string, span[class*="attributed-string"] {
   max-height: none !important;
   -webkit-line-clamp: none !important;
   line-clamp: none !important;
@@ -958,7 +1299,7 @@ ytd-backstage-post-renderer a, ytd-backstage-post-renderer span[class*="hashtag"
 
       const selector = "ytd-backstage-post-renderer";
       const postLocator = page.locator(selector).first();
-      await postLocator.waitFor({ timeout: 20000 });
+      await postLocator.waitFor({ timeout: 12000 });
 
       // Expand "Read more" / "자세히 알아보기" / "더 보기" button
       try {
@@ -1132,7 +1473,7 @@ ytd-backstage-post-renderer a, ytd-backstage-post-renderer span[class*="hashtag"
       const box = await postLocator.boundingBox();
       if (box && box.height > 0) {
         const desiredH = Math.floor(box.height) + 300;
-        const adjustedH = Math.max(1200, Math.min(desiredH, 8000));
+        const adjustedH = Math.max(1200, Math.min(desiredH, 15000));
         await page.setViewportSize({ width: 1920, height: adjustedH });
         await page.waitForTimeout(400);
         await postLocator.scrollIntoViewIfNeeded({ timeout: 3000 });
@@ -1179,169 +1520,214 @@ ytd-backstage-post-renderer a, ytd-backstage-post-renderer span[class*="hashtag"
       }
       const html = await response.text();
 
-      // Extract OG tags as initial values
-      let ogTitle = html.match(/<meta[^>]*property=["\x27]og:title["\x27][^>]*content=["\x27]([^"\x27]*)["\x27]/i)?.[1] ||
-                    html.match(/<meta[^>]*content=["\x27]([^"\x27]*)["\x27][^>]*property=["\x27]og:title["\x27]/i)?.[1] ||
-                    "YouTube Creator";
+      const extracted = extractYoutubePostData(html);
+      const channelName = extracted.channelName || "YouTube Creator";
+      const ogDesc = extracted.postText;
+      const ogImage = extracted.authorAvatar;
+      const publishedTime = extracted.publishedTime;
+      const voteCount = extracted.voteCount;
+      const postImages = extracted.postImages;
 
-      let ogDesc = html.match(/<meta[^>]*property=["\x27]og:description["\x27][^>]*content=["\x27]([^"\x27]*)["\x27]/i)?.[1] ||
-                   html.match(/<meta[^>]*content=["\x27]([^"\x27]*)["\x27][^>]*property=["\x27]og:description["\x27]/i)?.[1] ||
-                   "";
-
-      let ogImage = html.match(/<meta[^>]*property=["\x27]og:image["\x27][^>]*content=["\x27]([^"\x27]*)["\x27]/i)?.[1] ||
-                    html.match(/<meta[^>]*content=["\x27]([^"\x27]*)["\x27][^>]*property=["\x27]og:image["\x27]/i)?.[1] ||
-                    "";
-
-      // HTML Unescape helper
-      const unescapeHtml = (str: string) => {
-        return str
-          .replace(/&amp;/g, "&")
-          .replace(/&lt;/g, "<")
-          .replace(/&gt;/g, ">")
-          .replace(/&quot;/g, "\"")
-          .replace(/&#39;/g, "'")
-          .replace(/&#039;/g, "'");
-      };
-
-      ogDesc = unescapeHtml(ogDesc);
-
-      // Clean up ogTitle
-      let channelName = ogTitle;
-      const cleanPatterns = [
-        /\s*さんからの投稿\s*/i,
-        /\s*님의\s+포스트\s*/i,
-        /Post\s+from\s+/i,
-        /\s*-\s*YouTube/i
-      ];
-      for (const pattern of cleanPatterns) {
-        channelName = channelName.replace(pattern, "");
-      }
-      channelName = channelName.trim();
-
-      const ogImageFromMeta = ogImage;
-      let postImages: string[] = [];
-
-      // Attempt to extract rich, non-truncated content from ytInitialData
-      let publishedTime = "";
-      let voteCount = "";
-      let parsedSuccessfully = false;
-
-      const ytInitialDataMatch = html.match(/var\s+ytInitialData\s*=\s*({.+?});/);
-      if (ytInitialDataMatch) {
-        try {
-          const data = JSON.parse(ytInitialDataMatch[1]);
-          let post = null;
-          try {
-            const tabs = data?.contents?.twoColumnBrowseResultsRenderer?.tabs;
-            if (tabs) {
-              for (const tab of tabs) {
-                const contents = tab?.tabRenderer?.content?.sectionListRenderer?.contents;
-                if (contents) {
-                  for (const section of contents) {
-                    const items = section?.itemSectionRenderer?.contents;
-                    if (items) {
-                      for (const item of items) {
-                        if (item?.backstagePostThreadRenderer?.post?.backstagePostRenderer) {
-                          post = item.backstagePostThreadRenderer.post.backstagePostRenderer;
-                          break;
-                        }
-                      }
-                    }
-                    if (post) break;
-                  }
-                }
-                if (post) break;
-              }
-            }
-          } catch (err) {
-            console.warn("[ytInitialData] Error navigating tabs:", err);
-          }
-
-          if (post) {
-            if (post.authorText?.runs?.[0]?.text) {
-              channelName = post.authorText.runs[0].text;
-            }
-            if (post.publishedTimeText?.runs?.[0]?.text) {
-              publishedTime = post.publishedTimeText.runs[0].text;
-            }
-            if (post.authorThumbnail?.thumbnails?.length > 0) {
-              const thumbs = post.authorThumbnail.thumbnails;
-              const highest = thumbs[thumbs.length - 1];
-              let thumbUrl = highest.url;
-              if (thumbUrl.startsWith("//")) {
-                thumbUrl = "https:" + thumbUrl;
-              }
-              ogImage = thumbUrl;
-            }
-            if (post.voteCount?.simpleText) {
-              voteCount = post.voteCount.simpleText;
-            } else if (post.voteCount?.accessibility?.accessibilityData?.label) {
-              voteCount = post.voteCount.accessibility.accessibilityData.label;
-            }
-            if (post.contentText?.runs) {
-              let textContent = "";
-              for (const run of post.contentText.runs) {
-                if (run.text) {
-                  textContent += run.text;
-                }
-              }
-              if (textContent.trim()) {
-                ogDesc = textContent;
-                parsedSuccessfully = true;
-                console.log("[captureYoutubePost Fallback] Successfully parsed full YouTube post text from ytInitialData! Length:", ogDesc.length);
-              }
-            }
-
-            // Extract images from backstage post attachment
-            if (post.attachment) {
-              // 1. Single Image
-              const singleImage = post.attachment?.backstageImageRenderer?.image?.thumbnails;
-              if (singleImage && singleImage.length > 0) {
-                const imgUrl = singleImage[singleImage.length - 1].url;
-                postImages.push(imgUrl.startsWith("//") ? "https:" + imgUrl : imgUrl);
-              }
-              // 2. Multi-image
-              const multiImages = post.attachment?.postMultiImageRenderer?.images;
-              if (Array.isArray(multiImages)) {
-                for (const imgItem of multiImages) {
-                  const thumbs = imgItem?.backstageImageRenderer?.image?.thumbnails;
-                  if (thumbs && thumbs.length > 0) {
-                    const imgUrl = thumbs[thumbs.length - 1].url;
-                    postImages.push(imgUrl.startsWith("//") ? "https:" + imgUrl : imgUrl);
-                  }
-                }
-              }
-            }
-          }
-        } catch (jsonErr) {
-          console.warn("[captureYoutubePost Fallback] Failed to parse ytInitialData JSON:", jsonErr);
-        }
-      }
-
-      // Note: Do NOT use ogImageFromMeta as postImages fallback because YouTube's og:image meta tag is the channel profile avatar, not a post image.
-
-      console.log(`[captureYoutubePost Fallback] Redirecting to Microlink with dynamic page rendering... Images found: ${postImages.length}`);
-      const finalHost = hostUrl || "https://ais-dev-errgpu747quwousyeut56p-220065767305.asia-northeast1.run.app";
-      
-      const renderId = Math.random().toString(36).substring(2, 12) + Date.now().toString(36);
-      renderDataStore.set(renderId, {
+      console.log(`[captureYoutubePost Fallback] Rendering card locally... Text length: ${ogDesc.length}, Images: ${postImages.length}`);
+      const htmlContent = generateYoutubePostHtmlCard(
         channelName,
-        desc: ogDesc,
-        avatar: ogImage,
+        ogDesc,
+        ogImage,
         theme,
         publishedTime,
         voteCount,
-        postImages,
-        createdAt: Date.now()
-      });
+        postImages
+      );
 
-      const renderUrl = `${finalHost}/api/render-youtube-post?id=${renderId}`;
-      return await captureViaMicrolink(renderUrl, "#youtube-post-card", theme);
+      try {
+        return await captureCardHtmlWithPlaywright(htmlContent, "#youtube-post-card", theme);
+      } catch (localPwErr) {
+        console.warn("[captureYoutubePost Fallback] Local Playwright card capture failed, falling back to in-memory SVG card generator:", localPwErr);
+        return await generateYoutubeSvg(
+          channelName,
+          ogDesc,
+          ogImage,
+          publishedTime,
+          voteCount,
+          theme,
+          postImages
+        );
+      }
     } catch (fallbackErr: any) {
       console.error("[captureYoutubePost] Meta extraction fallback also failed:", fallbackErr);
       throw new Error(`Playwright failed: ${error.message || error}. Fallback failed: ${fallbackErr.message || fallbackErr}`);
     }
   }
+}
+
+// Helper function to extract YouTube post data from raw HTML (resilient against page updates and layout variations)
+function extractYoutubePostData(html: string): {
+  channelName: string;
+  authorAvatar: string;
+  postText: string;
+  publishedTime: string;
+  voteCount: string;
+  postImages: string[];
+} {
+  let channelName = "";
+  let authorAvatar = "";
+  let postText = "";
+  let publishedTime = "";
+  let voteCount = "";
+  let postImages: string[] = [];
+
+  const safeJsonParse = (str: string) => {
+    try {
+      return JSON.parse(str);
+    } catch {
+      return null;
+    }
+  };
+
+  const findPostInObj = (obj: any): any => {
+    if (!obj || typeof obj !== "object") return null;
+    if (obj.backstagePostRenderer) return obj.backstagePostRenderer;
+    if (obj.sharedPostRenderer) return obj.sharedPostRenderer;
+    for (const key of Object.keys(obj)) {
+      if (key === "trackingParams" || key === "serviceTrackingParams") continue;
+      const found = findPostInObj(obj[key]);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  // Method 1: Direct token search for "backstagePostRenderer": with brace balancing (fastest, extracts 100% full content)
+  let postObj: any = null;
+  const token = '"backstagePostRenderer":';
+  const tokenIdx = html.indexOf(token);
+  if (tokenIdx !== -1) {
+    let braceCount = 0;
+    let startBrace = html.indexOf("{", tokenIdx + token.length);
+    let endBrace = -1;
+    if (startBrace !== -1) {
+      for (let i = startBrace; i < html.length; i++) {
+        if (html[i] === "{") braceCount++;
+        else if (html[i] === "}") {
+          braceCount--;
+          if (braceCount === 0) {
+            endBrace = i;
+            break;
+          }
+        }
+      }
+      if (endBrace !== -1) {
+        postObj = safeJsonParse(html.slice(startBrace, endBrace + 1));
+      }
+    }
+  }
+
+  // Method 2: ytInitialData extraction if Method 1 didn't yield an object
+  if (!postObj) {
+    let ytInitialData: any = null;
+    const markers = ["var ytInitialData = ", "window['ytInitialData'] = ", 'window["ytInitialData"] = '];
+    for (const marker of markers) {
+      const sIdx = html.indexOf(marker);
+      if (sIdx !== -1) {
+        const endScript = html.indexOf("</script>", sIdx);
+        if (endScript !== -1) {
+          let raw = html.slice(sIdx + marker.length, endScript).trim();
+          if (raw.endsWith(";")) raw = raw.slice(0, -1);
+          ytInitialData = safeJsonParse(raw);
+          if (ytInitialData) break;
+        }
+      }
+    }
+    if (ytInitialData) {
+      postObj = findPostInObj(ytInitialData);
+    }
+  }
+
+  if (postObj) {
+    if (postObj.authorText?.runs?.[0]?.text) {
+      channelName = postObj.authorText.runs[0].text;
+    }
+    if (postObj.publishedTimeText?.runs?.[0]?.text) {
+      publishedTime = postObj.publishedTimeText.runs[0].text;
+    }
+    if (postObj.authorThumbnail?.thumbnails?.length > 0) {
+      const thumbs = postObj.authorThumbnail.thumbnails;
+      let url = thumbs[thumbs.length - 1].url;
+      if (url.startsWith("//")) url = "https:" + url;
+      authorAvatar = url;
+    }
+    if (postObj.voteCount?.simpleText) {
+      voteCount = postObj.voteCount.simpleText;
+    } else if (postObj.voteCount?.accessibility?.accessibilityData?.label) {
+      voteCount = postObj.voteCount.accessibility.accessibilityData.label;
+    }
+    if (postObj.contentText?.runs && Array.isArray(postObj.contentText.runs)) {
+      postText = postObj.contentText.runs.map((r: any) => r.text || "").join("");
+    }
+
+    if (postObj.attachment) {
+      const single = postObj.attachment?.backstageImageRenderer?.image?.thumbnails;
+      if (single && single.length > 0) {
+        let u = single[single.length - 1].url;
+        postImages.push(u.startsWith("//") ? "https:" + u : u);
+      }
+      const multi = postObj.attachment?.postMultiImageRenderer?.images;
+      if (Array.isArray(multi)) {
+        for (const itm of multi) {
+          const t = itm?.backstageImageRenderer?.image?.thumbnails;
+          if (t && t.length > 0) {
+            let u = t[t.length - 1].url;
+            postImages.push(u.startsWith("//") ? "https:" + u : u);
+          }
+        }
+      }
+    }
+  }
+
+  // Method 3: Fallback to HTML meta tags
+  if (!channelName) {
+    const ogTitle = html.match(/<meta[^>]*property=["\x27]og:title["\x27][^>]*content=["\x27]([^"\x27]*)["\x27]/i)?.[1] ||
+                    html.match(/<meta[^>]*content=["\x27]([^"\x27]*)["\x27][^>]*property=["\x27]og:title["\x27]/i)?.[1] ||
+                    "YouTube Creator";
+    channelName = ogTitle
+      .replace(/\s*さんからの投稿\s*/i, "")
+      .replace(/\s*님의\s+포스트\s*/i, "")
+      .replace(/Post\s+from\s+/i, "")
+      .replace(/\s*-\s*YouTube/i, "")
+      .trim();
+  }
+
+  if (!authorAvatar) {
+    const ogImage = html.match(/<meta[^>]*property=["\x27]og:image["\x27][^>]*content=["\x27]([^"\x27]*)["\x27]/i)?.[1] ||
+                    html.match(/<meta[^>]*content=["\x27]([^"\x27]*)["\x27][^>]*property=["\x27]og:image["\x27]/i)?.[1] ||
+                    "";
+    if (ogImage) authorAvatar = ogImage;
+  }
+
+  if (!postText) {
+    const ogDesc = html.match(/<meta[^>]*property=["\x27]og:description["\x27][^>]*content=["\x27]([^"\x27]*)["\x27]/i)?.[1] ||
+                   html.match(/<meta[^>]*content=["\x27]([^"\x27]*)["\x27][^>]*property=["\x27]og:description["\x27]/i)?.[1] ||
+                   "";
+    postText = ogDesc;
+  }
+
+  const unescapeHtml = (str: string) => {
+    return str
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&#039;/g, "'");
+  };
+
+  return {
+    channelName: unescapeHtml(channelName),
+    authorAvatar,
+    postText: unescapeHtml(postText),
+    publishedTime: unescapeHtml(publishedTime),
+    voteCount: unescapeHtml(voteCount),
+    postImages,
+  };
 }
 
 async function generateYoutubeSvg(
@@ -1350,7 +1736,8 @@ async function generateYoutubeSvg(
   avatarUrl: string,
   publishedTime: string,
   voteCount: string,
-  theme: "light" | "dark"
+  theme: "light" | "dark",
+  postImages: string[] = []
 ): Promise<Buffer> {
   const isDark = theme === "dark";
   const subTextColor = isDark ? "#aaaaaa" : "#606060";
@@ -1370,50 +1757,95 @@ async function generateYoutubeSvg(
     }
   }
 
+  let postImagesBase64: string[] = [];
+  if (postImages && postImages.length > 0) {
+    for (const imgUrl of postImages.slice(0, 4)) {
+      try {
+        const imgRes = await fetch(imgUrl, { signal: AbortSignal.timeout(3000) });
+        if (imgRes.ok) {
+          const buf = Buffer.from(await imgRes.arrayBuffer());
+          const mime = imgRes.headers.get("content-type") || "image/jpeg";
+          postImagesBase64.push(`data:${mime};base64,${buf.toString("base64")}`);
+        } else {
+          postImagesBase64.push(imgUrl);
+        }
+      } catch (e) {
+        postImagesBase64.push(imgUrl);
+      }
+    }
+  }
+
+  const escapeHtml = (str: string) => {
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/&lt;/g, "<")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  };
+
   const linkify = (text: string) => {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
     return text.replace(urlRegex, (url) => {
-      const escapedUrl = url
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+      const escapedUrl = escapeHtml(url);
       return `<a href="${escapedUrl}" style="color: #3ea6ff; text-decoration: none;" target="_blank">${escapedUrl}</a>`;
     });
   };
 
-  // Safe estimate of content height taking newlines and wide characters into account
+  // Safe and accurate estimate of content height taking newlines and character widths into account
   const lines = desc.split("\n");
   let totalLineCount = 0;
   for (const line of lines) {
+    if (line.trim() === "") {
+      totalLineCount += 1.0;
+      continue;
+    }
     let visualLength = 0;
     for (let i = 0; i < line.length; i++) {
       const charCode = line.charCodeAt(i);
-      // CJK/Hangul characters are wider (typically 1.75 - 2 times standard latin characters)
+      // CJK/Hangul characters are ~14px wide compared to Latin ~7.5px
       if (charCode > 127) {
-        visualLength += 1.75;
+        visualLength += 1.8;
       } else {
         visualLength += 1.0;
       }
     }
     // Available line width is 552px (600px - 48px padding).
-    // At 14px font-size, a standard latin line holds around 68 visual units.
-    const wrapCount = Math.max(1, Math.ceil(visualLength / 68));
+    // In Pretendard at 14px, a standard line holds ~72 visual units.
+    const wrapCount = Math.max(1, Math.ceil(visualLength / 72));
     totalLineCount += wrapCount;
   }
-  // Add a small buffer line for safety
-  totalLineCount += 0.5;
 
-  const estimatedTextHeight = Math.max(3, totalLineCount) * 21;
-  // Non-text vertical base height is exactly 155px (top-bottom padding, avatar, header, margins, and footer)
-  const calculatedHeight = 155 + estimatedTextHeight;
-  const finalHeight = Math.max(260, Math.min(calculatedHeight, 1500));
+  const estimatedTextHeight = Math.ceil(Math.max(1, totalLineCount) * 21.7);
+  const imagesHeight = postImagesBase64.length === 1 ? 380 : postImagesBase64.length > 1 ? 300 : 0;
+  // Non-text vertical height:
+  // Top/bottom padding: 48px
+  // Header (avatar 40px + margin 16px): 56px
+  // Content bottom margin: 16px
+  // Footer (icons 18px + padding-top 14px + border 1px): 33px
+  // Total non-text height = 153px
+  const calculatedHeight = 153 + estimatedTextHeight + imagesHeight;
+  const finalHeight = Math.max(200, Math.min(calculatedHeight, 15000));
+
+  let imagesHtml = "";
+  if (postImagesBase64.length === 1) {
+    imagesHtml = `
+      <div style="margin-top: 14px; border-radius: 12px; overflow: hidden; max-height: 380px;">
+        <img src="${postImagesBase64[0]}" style="width: 100%; max-height: 380px; object-fit: cover; display: block;" />
+      </div>
+    `;
+  } else if (postImagesBase64.length > 1) {
+    imagesHtml = `
+      <div style="margin-top: 14px; border-radius: 12px; overflow: hidden; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; max-height: 300px;">
+        ${postImagesBase64.map((src) => `<img src="${src}" style="width: 100%; height: 146px; object-fit: cover; display: block;" />`).join("")}
+      </div>
+    `;
+  }
 
   const svgContent = `
     <svg width="600" height="${finalHeight}" viewBox="0 0 600 ${finalHeight}" fill="none" xmlns="http://www.w3.org/2000/svg">
       <foreignObject width="600" height="${finalHeight}">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="
+        <div id="youtube-card-root" xmlns="http://www.w3.org/1999/xhtml" style="
           font-family: 'Pretendard', system-ui, -apple-system, sans-serif;
           background-color: ${isDark ? "#1f1f1f" : "#ffffff"};
           color: ${isDark ? "#f1f1f1" : "#0f0f0f"};
@@ -1422,7 +1854,9 @@ async function generateYoutubeSvg(
           padding: 24px;
           box-sizing: border-box;
           width: 100%;
-          height: 100%;
+          height: auto;
+          display: flex;
+          flex-direction: column;
         ">
           <div style="display: flex; align-items: center; margin-bottom: 16px;">
             ${avatarBase64 ? `
@@ -1443,8 +1877,11 @@ async function generateYoutubeSvg(
               <span style="font-size: 11px; color: ${subTextColor};">YouTube Community Post</span>
             </div>
           </div>
-          <div style="font-size: 14px; line-height: 1.5; color: ${isDark ? "#f1f1f1" : "#0f0f0f"}; white-space: pre-wrap; word-break: break-word; margin-bottom: 20px;">
-            ${linkify(escapeHtml(desc))}
+          <div style="margin-bottom: 16px;">
+            <div style="font-size: 14px; line-height: 1.55; color: ${isDark ? "#f1f1f1" : "#0f0f0f"}; white-space: pre-wrap; word-break: break-word;">
+              ${linkify(escapeHtml(desc))}
+            </div>
+            ${imagesHtml}
           </div>
           <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid ${isDark ? "#3f3f3f" : "#e5e5e5"}; padding-top: 14px; font-size: 12px;">
             <div style="display: flex; align-items: center; gap: 16px;">
@@ -1984,12 +2421,179 @@ function extractYoutubeVideoId(url: string): string | null {
   return null;
 }
 
-// Playwright Capture for YouTube Thumbnail Custom Card
+// Best quality thumbnail resolver with direct image download
+async function fetchBestYoutubeThumbnail(videoId: string, oembedThumbUrl?: string): Promise<{ thumbUrl: string; dataUri: string }> {
+  const candidates: string[] = [
+    `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
+    `https://i.ytimg.com/vi/${videoId}/sddefault.jpg`,
+    `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+  ];
+  if (oembedThumbUrl && !candidates.includes(oembedThumbUrl)) {
+    candidates.push(oembedThumbUrl);
+  }
+  candidates.push(`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`);
+
+  for (const cand of candidates) {
+    try {
+      const res = await fetch(cand, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+      });
+      if (res.ok) {
+        const buf = Buffer.from(await res.arrayBuffer());
+        // YouTube returns a tiny 120x90 transparent gif/placeholder (<1500 bytes) if a resolution is missing
+        if (buf.length > 2000) {
+          const contentType = res.headers.get("content-type") || "image/jpeg";
+          return {
+            thumbUrl: cand,
+            dataUri: `data:${contentType};base64,${buf.toString("base64")}`,
+          };
+        }
+      }
+    } catch (e) {
+      // Continue to next candidate
+    }
+  }
+
+  // Fallback to hqdefault
+  const fallbackUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+  const fallbackRes = await urlToDataUriAndDimensions(fallbackUrl);
+  return {
+    thumbUrl: fallbackUrl,
+    dataUri: fallbackRes.dataUri,
+  };
+}
+
+// In-Memory Vector SVG Card Generator for YouTube Thumbnails (100% reliable in production/serverless)
+async function generateYoutubeThumbnailSvgCard(
+  info: {
+    title: string;
+    authorName?: string;
+    thumbDataUri?: string;
+    videoId: string;
+  },
+  theme: "light" | "dark" = "light"
+): Promise<Buffer> {
+  const isDark = theme === "dark";
+  const bgColor = isDark ? "#121212" : "#ffffff";
+  const textColor = isDark ? "#f3f4f6" : "#111827";
+  const subTextColor = isDark ? "#9ca3af" : "#4b5563";
+  const borderColor = isDark ? "#2d2d2d" : "#e5e7eb";
+  const badgeBg = isDark ? "#2a0f10" : "#fff1f2";
+  const badgeBorder = isDark ? "#4c1d1d" : "#fecaca";
+
+  const rawTitle = info.title || "YouTube Video";
+  const authorName = escapeHtml(info.authorName || "Creator Media");
+  const authorInitial = escapeHtml(authorName.charAt(0).toUpperCase() || "Y");
+
+  // Calculate text wrapping for title (max ~38 chars per line, up to 3 lines)
+  const maxLineLen = 38;
+  const rawLines = rawTitle.split("\n");
+  const titleLines: string[] = [];
+  for (const rl of rawLines) {
+    if (rl.length <= maxLineLen) {
+      titleLines.push(rl);
+    } else {
+      let cur = rl;
+      while (cur.length > maxLineLen) {
+        titleLines.push(cur.slice(0, maxLineLen));
+        cur = cur.slice(maxLineLen);
+      }
+      if (cur) titleLines.push(cur);
+    }
+  }
+
+  const displayLines = titleLines.slice(0, 3);
+  if (titleLines.length > 3) {
+    displayLines[2] = displayLines[2].slice(0, maxLineLen - 3) + "...";
+  }
+
+  const titleLineHeight = 26;
+  const titleHeight = Math.max(1, displayLines.length) * titleLineHeight;
+
+  const cardWidth = 580;
+  const thumbWidth = 532;
+  const thumbHeight = 300; // 16:9 ratio
+  const badgeY = 24 + thumbHeight + 20; // 344
+  const titleY = badgeY + 36; // 380
+  const dividerY = titleY + titleHeight + 10;
+  const footerY = dividerY + 16;
+  const cardHeight = footerY + 36;
+
+  const svg = `
+<svg width="${cardWidth}" height="${cardHeight}" viewBox="0 0 ${cardWidth} ${cardHeight}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="yt-thumb-clip">
+      <rect x="24" y="24" width="${thumbWidth}" height="${thumbHeight}" rx="16" />
+    </clipPath>
+    <filter id="yt-card-shadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="rgba(0,0,0,${isDark ? "0.5" : "0.08"})" />
+    </filter>
+  </defs>
+
+  <!-- Card Background with Shadow -->
+  <rect x="0" y="0" width="${cardWidth}" height="${cardHeight}" rx="24" fill="${bgColor}" stroke="${borderColor}" stroke-width="1" filter="url(#yt-card-shadow)" />
+
+  <!-- 16:9 Thumbnail Image Container -->
+  <g>
+    <!-- Background placeholder -->
+    <rect x="24" y="24" width="${thumbWidth}" height="${thumbHeight}" rx="16" fill="#000000" />
+    ${
+      info.thumbDataUri
+        ? `<image href="${escapeHtml(info.thumbDataUri)}" x="24" y="24" width="${thumbWidth}" height="${thumbHeight}" preserveAspectRatio="xMidYMid slice" clip-path="url(#yt-thumb-clip)" />`
+        : `<text x="${24 + thumbWidth / 2}" y="${24 + thumbHeight / 2}" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="16" fill="#888888" text-anchor="middle">YouTube Thumbnail</text>`
+    }
+  </g>
+
+  <!-- Platform Badge: YouTube Video -->
+  <g transform="translate(24, ${badgeY})">
+    <rect width="124" height="24" rx="12" fill="${badgeBg}" stroke="${badgeBorder}" stroke-width="1" />
+    <!-- YouTube Icon -->
+    <svg x="8" y="5" width="14" height="14" viewBox="0 0 24 24" fill="#ef4444">
+      <path d="M23.498 6.163a3.003 3.003 0 0 0-2.11-2.11C19.518 3.5 12 3.5 12 3.5s-7.518 0-9.388.553a3.003 3.003 0 0 0-2.11 2.11C0 8.033 0 12 0 12s0 3.967.502 5.837a3.003 3.003 0 0 0 2.11 2.11c1.87.553 9.388.553 9.388.553s7.518 0 9.388-.553a3.003 3.003 0 0 0 2.11-2.11C24 15.967 24 12 24 12s0-3.967-.502-5.837zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+    </svg>
+    <text x="28" y="16" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="10.5" font-weight="700" fill="#ef4444" letter-spacing="0.5">YOUTUBE VIDEO</text>
+  </g>
+
+  <!-- Video Title -->
+  <g transform="translate(24, ${titleY})">
+    ${displayLines
+      .map(
+        (line, idx) =>
+          `<text x="0" y="${idx * titleLineHeight + 18}" font-family="-apple-system, BlinkMacSystemFont, 'Pretendard', 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="800" fill="${textColor}">${escapeHtml(line)}</text>`
+      )
+      .join("")}
+  </g>
+
+  <!-- Divider Line -->
+  <line x1="24" y1="${dividerY}" x2="556" y2="${dividerY}" stroke="${borderColor}" stroke-width="1" />
+
+  <!-- Footer Section -->
+  <g transform="translate(24, ${footerY})">
+    <!-- Channel Avatar Circle -->
+    <circle cx="12" cy="12" r="12" fill="#ef4444" />
+    <text x="12" y="16" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="11" font-weight="bold" fill="#ffffff" text-anchor="middle">${authorInitial}</text>
+    
+    <!-- Channel / Author Name -->
+    <text x="32" y="16" font-family="-apple-system, BlinkMacSystemFont, 'Pretendard', 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="600" fill="${subTextColor}">${authorName}</text>
+    
+    <!-- Domain -->
+    <text x="532" y="16" font-family="monospace, -apple-system, sans-serif" font-size="11" font-weight="500" fill="${subTextColor}" text-anchor="end">youtube.com</text>
+  </g>
+</svg>
+`.trim();
+
+  return Buffer.from(svg, "utf-8");
+}
+
+// Capture for YouTube Thumbnail Custom Card (Hybrid Playwright + Direct SVG fallback)
 async function captureYoutubeThumbnail(
   videoUrl: string,
   theme: "light" | "dark" = "light",
   hostUrl?: string
-): Promise<{ buffer: Buffer; title: string; watchUrl: string; videoId: string }> {
+): Promise<{ buffer: Buffer; title: string; watchUrl: string; videoId: string; rawThumbnailUrl: string; authorName: string }> {
   const videoId = extractYoutubeVideoId(videoUrl);
   if (!videoId) {
     throw new Error("올바른 유튜브 영상 URL 형식이 아닙니다.");
@@ -1997,32 +2601,38 @@ async function captureYoutubeThumbnail(
 
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
   
-  // oEmbed to get the beautiful title
+  // 1. Fetch metadata via oEmbed
   let title = "YouTube Video";
+  let authorName = "Creator Media";
+  let oembedThumbUrl = "";
   try {
     const oembedUrl = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(watchUrl)}`;
-    const response = await fetch(oembedUrl);
+    const response = await fetch(oembedUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+    });
     if (response.ok) {
-      const data = await response.json() as any;
+      const data = (await response.json()) as any;
       if (data && data.title) {
         title = data.title;
+      }
+      if (data && data.author_name) {
+        authorName = data.author_name;
+      }
+      if (data && data.thumbnail_url) {
+        oembedThumbUrl = data.thumbnail_url;
       }
     }
   } catch (e) {
     console.error("Failed to fetch youtube title via oembed", e);
   }
 
-  // Choose the best quality thumbnail
-  let thumbUrl = `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`;
-  try {
-    const res = await fetch(thumbUrl, { method: "HEAD" });
-    if (res.status !== 200) {
-      thumbUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-    }
-  } catch (e) {
-    thumbUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-  }
+  // 2. Fetch the best quality thumbnail image directly as base64 dataUri
+  const { thumbUrl, dataUri } = await fetchBestYoutubeThumbnail(videoId, oembedThumbUrl);
 
+  // 3. Attempt local Playwright if available
   try {
     const browser = await launchBrowser();
 
@@ -2085,30 +2695,6 @@ async function captureYoutubeThumbnail(
             width: 100%;
             height: 100%;
             object-fit: cover;
-          }
-
-          .play-overlay {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 64px;
-            height: 44px;
-            background: rgba(229, 9, 20, 0.95);
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 6px 20px rgba(229, 9, 20, 0.4);
-          }
-
-          .play-triangle {
-            width: 0;
-            height: 0;
-            border-top: 8px solid transparent;
-            border-left: 14px solid #ffffff;
-            border-bottom: 8px solid transparent;
-            margin-left: 3px;
           }
 
           .info-section {
@@ -2189,10 +2775,7 @@ async function captureYoutubeThumbnail(
       <body>
         <div class="card" id="youtube-thumb-card">
           <div class="thumbnail-container">
-            <img class="thumbnail-image" src="${thumbUrl}" />
-            <div class="play-overlay">
-              <div class="play-triangle"></div>
-            </div>
+            <img class="thumbnail-image" src="${dataUri || thumbUrl}" />
           </div>
           <div class="info-section">
             <div class="platform-badge">
@@ -2202,8 +2785,8 @@ async function captureYoutubeThumbnail(
             <h1 class="title">${escapeHtml(title)}</h1>
             <div class="footer">
               <div class="author-info">
-                <div class="author-avatar">YT</div>
-                <span class="author-name">Creator Media</span>
+                <div class="author-avatar">${escapeHtml(authorName.charAt(0).toUpperCase() || "Y")}</div>
+                <span class="author-name">${escapeHtml(authorName)}</span>
               </div>
               <span class="domain">youtube.com</span>
             </div>
@@ -2215,31 +2798,29 @@ async function captureYoutubeThumbnail(
 
     await page.setContent(htmlContent);
     await page.waitForLoadState("networkidle");
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(300);
 
     const cardElement = page.locator("#youtube-thumb-card");
     const buffer = await cardElement.screenshot({ type: "png", omitBackground: true });
 
     await browser.close();
 
-    return { buffer, title, watchUrl, videoId };
+    return { buffer, title, watchUrl, videoId, rawThumbnailUrl: thumbUrl, authorName };
   } catch (error) {
-    console.warn("[captureYoutubeThumbnail] Playwright failed, falling back to Microlink with dynamic page rendering:", error);
+    console.warn("[captureYoutubeThumbnail] Playwright failed or browser unavailable. Using high-resolution SVG fallback card:", error);
     
-    // Construct public render url using the supplied hostUrl or a reliable default
-    const finalHost = hostUrl || "https://ais-dev-errgpu747quwousyeut56p-220065767305.asia-northeast1.run.app";
-    const renderId = Math.random().toString(36).substring(2, 12) + Date.now().toString(36);
-    renderDataStore.set(renderId, {
-      videoId,
-      title,
-      theme,
-      createdAt: Date.now()
-    });
+    // 4. In production/serverless environment where Chromium isn't available, generate SVG card directly
+    const buffer = await generateYoutubeThumbnailSvgCard(
+      {
+        title,
+        authorName,
+        thumbDataUri: dataUri,
+        videoId,
+      },
+      theme
+    );
 
-    const renderUrl = `${finalHost}/api/render-youtube-thumb?id=${renderId}`;
-    
-    const buffer = await captureViaMicrolink(renderUrl, "#youtube-thumb-card", theme);
-    return { buffer, title, watchUrl, videoId };
+    return { buffer, title, watchUrl, videoId, rawThumbnailUrl: thumbUrl, authorName };
   }
 }
 
@@ -2316,30 +2897,6 @@ async function startServer() {
             width: 100%;
             height: 100%;
             object-fit: cover;
-          }
-
-          .play-overlay {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 64px;
-            height: 44px;
-            background: rgba(229, 9, 20, 0.95);
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 6px 20px rgba(229, 9, 20, 0.4);
-          }
-
-          .play-triangle {
-            width: 0;
-            height: 0;
-            border-top: 8px solid transparent;
-            border-left: 14px solid #ffffff;
-            border-bottom: 8px solid transparent;
-            margin-left: 3px;
           }
 
           .info-section {
@@ -2421,9 +2978,6 @@ async function startServer() {
         <div class="card" id="youtube-thumb-card">
           <div class="thumbnail-container">
             <img class="thumbnail-image" src="${thumbUrl}" onerror="this.onerror=null;this.src='https://i.ytimg.com/vi/${videoId}/hqdefault.jpg';" />
-            <div class="play-overlay">
-              <div class="play-triangle"></div>
-            </div>
           </div>
           <div class="info-section">
             <div class="platform-badge">
@@ -2467,273 +3021,16 @@ async function startServer() {
       postImages = rawPostImages ? (Array.isArray(rawPostImages) ? rawPostImages as string[] : [rawPostImages as string]) : [];
     }
 
-    const isDark = theme === "dark";
-    const bgColor = isDark ? "#1f1f1f" : "#ffffff";
-    const textColor = isDark ? "#f1f1f1" : "#0f0f0f";
-    const subTextColor = isDark ? "#aaaaaa" : "#606060";
-    const borderColor = isDark ? "#3f3f3f" : "#e5e5e5";
-
-    const linkify = (text: string) => {
-      const urlRegex = /(https?:\/\/[^\s]+)/g;
-      return text.replace(urlRegex, (url) => {
-        return `<a href="${url}" style="color: #3ea6ff; text-decoration: none;" target="_blank">${url}</a>`;
-      });
-    };
-
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <style>
-          @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-          @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
-          
-          body {
-            margin: 0;
-            padding: 40px;
-            background: transparent;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            font-family: 'Pretendard', 'Noto Sans KR', sans-serif;
-          }
-
-          .card {
-            width: 580px;
-            background: ${bgColor};
-            border: 1px solid ${borderColor};
-            border-radius: 20px;
-            padding: 20px 24px 14px 24px;
-            box-shadow: 0 12px 40px rgba(0, 0, 0, ${isDark ? "0.4" : "0.08"});
-            box-sizing: border-box;
-          }
-
-          .header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 16px;
-          }
-
-          .avatar {
-            width: 48px;
-            height: 48px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 1px solid ${borderColor};
-          }
-
-          .creator-info {
-            display: flex;
-            flex-direction: column;
-          }
-
-          .creator-title-row {
-            display: flex;
-            align-items: baseline;
-            gap: 8px;
-          }
-
-          .creator-name {
-            font-size: 16px;
-            font-weight: 700;
-            color: ${textColor};
-          }
-
-          .published-bullet {
-            font-size: 11px;
-            color: ${subTextColor};
-          }
-
-          .published-time {
-            font-size: 13px;
-            color: ${subTextColor};
-            font-weight: 400;
-          }
-
-          .post-badge {
-            font-size: 12px;
-            color: ${subTextColor};
-            margin-top: 2px;
-          }
-
-          .content {
-            font-size: 15px;
-            line-height: 1.6;
-            color: ${textColor};
-            white-space: pre-wrap;
-            word-break: break-word;
-          }
-
-          /* Post Images Styling */
-          .post-images-container {
-            margin-top: 16px;
-            border-radius: 16px;
-            overflow: hidden;
-            border: 1px solid ${borderColor};
-            box-sizing: border-box;
-          }
-
-          .post-image {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            display: block;
-          }
-
-          /* Single image layout */
-          .single-image {
-            max-height: 480px;
-          }
-          .single-image .post-image {
-            max-height: 480px;
-            object-fit: contain;
-            background: ${isDark ? "#0f0f0f" : "#f9f9f9"};
-          }
-
-          /* Multi images layout */
-          .multi-images {
-            display: grid;
-            gap: 4px;
-            height: 320px;
-            background: ${isDark ? "#0f0f0f" : "#f9f9f9"};
-          }
-
-          .grid-2 {
-            grid-template-columns: 1fr 1fr;
-          }
-
-          .grid-3 {
-            grid-template-columns: 2fr 1fr;
-          }
-          .grid-3 .post-image-wrapper:nth-child(2) {
-            grid-column: 2;
-            grid-row: 1;
-          }
-          .grid-3 .post-image-wrapper:nth-child(3) {
-            grid-column: 2;
-            grid-row: 2;
-          }
-
-          .grid-4 {
-            grid-template-columns: 1fr 1fr;
-            grid-template-rows: 1fr 1fr;
-          }
-
-          .post-image-wrapper {
-            position: relative;
-            overflow: hidden;
-            height: 100%;
-          }
-
-          .more-images-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.6);
-            color: #ffffff;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-            font-weight: 700;
-          }
-
-          .footer {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            border-top: 1px solid ${borderColor};
-            padding-top: 12px;
-            margin-top: 16px;
-          }
-
-          .actions {
-            display: flex;
-            align-items: center;
-            gap: 18px;
-          }
-
-          .action-btn {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            color: ${textColor};
-            font-size: 13px;
-            font-weight: 500;
-          }
-
-          .action-icon {
-            width: 18px;
-            height: 18px;
-            color: ${isDark ? "#ffffff" : "#606060"};
-          }
-
-          .domain {
-            font-size: 11px;
-            font-weight: 500;
-            color: ${subTextColor};
-            font-family: monospace;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="card" id="youtube-post-card">
-          <div class="header">
-            ${avatar ? `<img class="avatar" src="${avatar}" />` : `<div class="avatar" style="background:#ef4444;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:18px;">YT</div>`}
-            <div class="creator-info">
-              <div class="creator-title-row">
-                <span class="creator-name">${escapeHtml(channelName)}</span>
-                ${publishedTime ? `<span class="published-bullet">•</span><span class="published-time">${escapeHtml(publishedTime)}</span>` : ""}
-              </div>
-              <span class="post-badge">YouTube Community Post</span>
-            </div>
-          </div>
-          <div class="content">${linkify(escapeHtml(desc))}</div>
-          
-          <!-- Render post images beautifully -->
-          ${postImages.length === 1 ? `
-            <div class="post-images-container single-image">
-              <img src="${postImages[0]}" class="post-image" />
-            </div>
-          ` : ""}
-
-          ${postImages.length > 1 ? `
-            <div class="post-images-container multi-images grid-${Math.min(postImages.length, 4)}">
-              ${postImages.slice(0, 4).map((img, idx) => `
-                <div class="post-image-wrapper">
-                  <img src="${img}" class="post-image" />
-                  ${postImages.length > 4 && idx === 3 ? `
-                    <div class="more-images-overlay">+${postImages.length - 4}</div>
-                  ` : ""}
-                </div>
-              `).join("")}
-            </div>
-          ` : ""}
-
-          <div class="footer">
-            <div class="actions">
-              <div class="action-btn">
-                <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>
-                <span>${escapeHtml(voteCount || "0")}</span>
-              </div>
-              <div class="action-btn">
-                <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>
-              </div>
-              <div class="action-btn">
-                <svg class="action-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M14 9V5l7 7-7 7v-4.1c-5 0-8.5 1.6-11 5.1 1-5 4-10 11-11.1z"/></svg>
-              </div>
-            </div>
-            <span class="domain">youtube.com</span>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
+    const htmlContent = generateYoutubePostHtmlCard(
+      channelName,
+      desc,
+      avatar,
+      theme,
+      publishedTime,
+      voteCount,
+      postImages
+    );
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(htmlContent);
   });
 
@@ -3257,6 +3554,42 @@ async function startServer() {
     }
   }
 
+  async function captureCardHtmlWithPlaywright(
+    htmlContent: string,
+    elementSelector: string = "#youtube-post-card",
+    theme: "light" | "dark" = "light"
+  ): Promise<Buffer> {
+    const browser = await launchBrowser();
+    try {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 3000 },
+        deviceScaleFactor: 3,
+        colorScheme: theme,
+      });
+      const page = await context.newPage();
+      await page.setContent(htmlContent, { waitUntil: "networkidle" });
+      await page.waitForTimeout(300);
+
+      const cardLocator = page.locator(elementSelector).first();
+      await cardLocator.waitFor({ timeout: 5000 });
+
+      const box = await cardLocator.boundingBox();
+      if (box && box.height > 0) {
+        const neededH = Math.ceil(box.height) + 200;
+        await page.setViewportSize({ width: 1280, height: Math.max(1200, neededH) });
+        await page.waitForTimeout(200);
+      }
+
+      const screenshotBuffer = await cardLocator.screenshot({
+        type: "png",
+        omitBackground: true,
+      });
+      return screenshotBuffer;
+    } finally {
+      await browser.close();
+    }
+  }
+
   // Web / Blog Image Extraction Helper
   async function extractWebImages(
     pageUrl: string,
@@ -3617,7 +3950,7 @@ async function startServer() {
         success: true,
         gifUrl: gifUrlPath,
         gifDataUrl: base64Gif,
-        filename: `x-video-${Date.now()}.gif`,
+        filename: `x-video-${getTimestampString()}.gif`,
         sizeMb: `${sizeInMb} MB`,
         sizeBytes: gifBuffer.length,
         durationSec: clampedDuration,
@@ -3704,7 +4037,7 @@ async function startServer() {
   // Direct MP4 Video Download Proxy Endpoint
   app.get("/api/download-video", async (req, res) => {
     const videoUrl = req.query.url as string;
-    const filename = (req.query.filename as string) || "x-video.mp4";
+    const filename = (req.query.filename as string) || `video-${getTimestampString()}.mp4`;
 
     if (!videoUrl) {
       return res.status(400).send("Video URL is required");
@@ -3743,7 +4076,7 @@ async function startServer() {
     try {
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
-      const filename = (zipFilename as string) || "extracted-images.zip";
+      const filename = (zipFilename as string) || `extracted-images-${getTimestampString()}.zip`;
 
       const fetchPromises = imageUrls.slice(0, 100).map(async (url: string, index: number) => {
         try {
@@ -3785,7 +4118,7 @@ async function startServer() {
   // Direct Image Download Proxy Endpoint
   app.get("/api/download-image", async (req, res) => {
     const imageUrl = req.query.url as string;
-    const filename = (req.query.filename as string) || "extracted-image.jpg";
+    const filename = (req.query.filename as string) || `extracted-image-${getTimestampString()}.jpg`;
     const referer = (req.query.referer as string) || imageUrl;
 
     if (!imageUrl) {
@@ -3857,6 +4190,8 @@ async function startServer() {
       let videoInfo: any = undefined;
       let imageInfo: any = undefined;
       let webImageInfo: any = undefined;
+      let rawThumbnailUrl: string | undefined;
+      let authorName: string | undefined;
 
       const protocol = req.headers["x-forwarded-proto"] || "https";
       const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:3000";
@@ -3905,6 +4240,8 @@ async function startServer() {
         finalUrl = result.watchUrl;
         finalPostId = result.videoId;
         title = result.title;
+        rawThumbnailUrl = result.rawThumbnailUrl;
+        authorName = result.authorName;
       } else {
         return res.status(400).json({ error: "지원하지 않는 플랫폼입니다." });
       }
@@ -3916,14 +4253,16 @@ async function startServer() {
       res.json({
         success: true,
         image: base64Image ? `data:${mimeType};base64,${base64Image}` : undefined,
-        filename: `${targetPlatform}-post-${finalPostId}.${isSvg ? "svg" : "png"}`,
+        filename: `${targetPlatform}-post-${finalPostId}-${getTimestampString()}.${isSvg ? "svg" : "png"}`,
         postId: finalPostId,
         normalizedUrl: finalUrl,
         title: title || undefined,
         platform: targetPlatform,
         videoInfo,
         imageInfo,
-        webImageInfo
+        webImageInfo,
+        rawThumbnailUrl,
+        authorName,
       });
     } catch (err: any) {
       console.error("[Screenshot Error]", err);

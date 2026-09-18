@@ -57,4 +57,5 @@ export interface ScreenshotHistoryItem {
   videoInfo?: VideoMediaInfo;
   imageInfo?: ImageMediaInfo;
   webImageInfo?: WebImageMediaInfo;
+  rawThumbnailUrl?: string;
 }
